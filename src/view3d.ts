@@ -4,6 +4,18 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 const TRAIL_CAPACITY = 4096;         // absolute buffer upper bound
 const TRAIL_BASE_RGB = [0.4, 1.0, 0.6] as const; // newest-point color
 
+const RIPPLE_DURATION_MS = 450;
+const RIPPLE_GROWTH = 6;             // final scale relative to initial ring
+const RIPPLE_MAX_ACTIVE = 24;
+const RIPPLE_COLOR_UP = 0x66ff99;
+const RIPPLE_COLOR_DOWN = 0xff6a9a;
+
+interface Ripple {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  born: number;
+}
+
 export class View3D {
   private container: HTMLElement;
   private renderer: THREE.WebGLRenderer;
@@ -24,6 +36,10 @@ export class View3D {
   private trailIdx = 0;
   private trailCount = 0;
   private trailMax = 512;
+
+  private rippleGeometry: THREE.RingGeometry;
+  private ripples: Ripple[] = [];
+  private ripplePool: THREE.Mesh[] = [];
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -106,9 +122,61 @@ export class View3D {
     );
     this.scene.add(this.trailPoints);
 
+    // Shared ring geometry for crossing ripples (one allocation).
+    this.rippleGeometry = new THREE.RingGeometry(0.055, 0.075, 48);
+
     this.onResize();
     const ro = new ResizeObserver(() => this.onResize());
     ro.observe(container);
+  }
+
+  triggerRipple(sign: number): void {
+    const color = sign >= 0 ? RIPPLE_COLOR_UP : RIPPLE_COLOR_DOWN;
+
+    let mesh = this.ripplePool.pop();
+    let material: THREE.MeshBasicMaterial;
+    if (!mesh) {
+      material = new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.9,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+      mesh = new THREE.Mesh(this.rippleGeometry, material);
+    } else {
+      material = mesh.material as THREE.MeshBasicMaterial;
+      material.color.setHex(color);
+      material.opacity = 0.9;
+    }
+    mesh.scale.set(1, 1, 1);
+    mesh.position.set(0, 0, 0);
+    this.scene.add(mesh);
+    this.ripples.push({ mesh, material, born: performance.now() });
+
+    // Bound active ripples — oldest is recycled.
+    while (this.ripples.length > RIPPLE_MAX_ACTIVE) {
+      const oldest = this.ripples.shift()!;
+      this.scene.remove(oldest.mesh);
+      this.ripplePool.push(oldest.mesh);
+    }
+  }
+
+  private updateRipples(now: number): void {
+    for (let i = this.ripples.length - 1; i >= 0; i--) {
+      const r = this.ripples[i];
+      const age = (now - r.born) / RIPPLE_DURATION_MS;
+      if (age >= 1) {
+        this.scene.remove(r.mesh);
+        this.ripplePool.push(r.mesh);
+        this.ripples.splice(i, 1);
+        continue;
+      }
+      const scale = 1 + age * RIPPLE_GROWTH;
+      r.mesh.scale.set(scale, scale, 1);
+      // Ease-out fade (quadratic)
+      r.material.opacity = 0.9 * (1 - age) * (1 - age);
+    }
   }
 
   setEccentricity(e: number): void {
@@ -225,6 +293,7 @@ export class View3D {
   }
 
   render(): void {
+    this.updateRipples(performance.now());
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
   }

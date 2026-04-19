@@ -221,6 +221,7 @@ worker.onmessage = (ev: MessageEvent<WorkerToMain>) => {
       break;
     case 'crossings':
       polar.add(m.items);
+      for (const c of m.items) view3d.triggerRipple(c.v);
       break;
     case 'status':
       $('status').textContent =
