@@ -16,12 +16,20 @@ export interface Crossing {
   v: number;     // z' at crossing (signed)
 }
 
+// Threshold beyond which the binary is effectively a point mass at the origin.
+// Orbital radius is ≤ (1+e)/2 ≤ 1; Z_FAR = 10 puts relative error in the
+// potential ~(1/200) — small enough that the asymptotic escape criterion holds.
+const Z_FAR = 10;
+
 // Particle on the z-axis subject to two symmetric orbiting bodies.
 // y = [z, z'],  z'' = -z / (r² + z²)^{3/2},  with r = bodyRadius(t).
 export class Sim {
   readonly params: SimParams;
   readonly integrator: DoPri5;
   readonly crossings: Crossing[] = [];
+
+  escaped = false;
+  escapeTime = 0;
 
   private yInterp = new Float64Array(2);
   private dInterp = new Float64Array(2);
@@ -47,15 +55,14 @@ export class Sim {
     });
   }
 
-  // Advance to tEnd (or until max crossings reached).
+  // Advance to tEnd (or until max crossings reached, or escape detected).
   // Returns the new crossings recorded during this call.
   advanceTo(tEnd: number): Crossing[] {
     const I = this.integrator;
     const out: Crossing[] = [];
     const maxN = this.params.maxCrossings;
 
-    while (I.t < tEnd && this.crossings.length < maxN) {
-      // Don't let a single step blow past tEnd.
+    while (I.t < tEnd && !this.escaped && this.crossings.length < maxN) {
       const remaining = tEnd - I.t;
       if (I.h > remaining) I.h = remaining;
       if (I.h < 1e-15) break;
@@ -63,9 +70,17 @@ export class Sim {
       const zBefore = I.y[0];
       I.step();
       const zAfter = I.y[0];
+      const vAfter = I.y[1];
 
-      // Sign change ⇒ crossing in (tLast, tLast + hLast).
-      // Skip the trivial "crossing" at t=0 (initial condition z=0).
+      // Escape check: particle is far from the origin, moving outward, with
+      // kinetic energy exceeding the asymptotic escape bound ½v² > 1/|z|.
+      const absZ = Math.abs(zAfter);
+      if (absZ > Z_FAR && vAfter * zAfter > 0 && 0.5 * vAfter * vAfter > 1 / absZ) {
+        this.escaped = true;
+        this.escapeTime = I.t;
+        break;
+      }
+
       if (zBefore === 0 && I.tLast === 0) continue;
       if (zBefore * zAfter < 0 || (zBefore !== 0 && zAfter === 0)) {
         const c = this.refineCrossing(zBefore, zAfter);

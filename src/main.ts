@@ -229,6 +229,9 @@ worker.onmessage = (ev: MessageEvent<WorkerToMain>) => {
     case 'done':
       $('status').textContent = `done.  N = ${m.count}`;
       break;
+    case 'escape':
+      $('status').textContent = `ESCAPE (t = ${m.t.toFixed(4)})   N = ${m.count}`;
+      break;
   }
 };
 

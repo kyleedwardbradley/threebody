@@ -34,4 +34,5 @@ export type WorkerToMain =
   | { type: 'snapshot'; snap: Snapshot }
   | { type: 'crossings'; items: CrossingMsg[] }
   | { type: 'done'; count: number }
+  | { type: 'escape'; t: number; count: number }
   | { type: 'status'; running: boolean; count: number; t: number };

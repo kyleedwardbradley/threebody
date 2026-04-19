@@ -63,6 +63,13 @@ function tick() {
     post({ type: 'status', running, count: sim.crossings.length, t: sim.integrator.t });
   }
 
+  if (sim.escaped) {
+    running = false;
+    post({ type: 'snapshot', snap: snapshot() });
+    post({ type: 'escape', t: sim.escapeTime, count: sim.crossings.length });
+    return;
+  }
+
   if (sim.crossings.length >= sim.params.maxCrossings) {
     running = false;
     post({ type: 'snapshot', snap: snapshot() });
