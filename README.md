@@ -16,11 +16,11 @@ A massless test particle is constrained to the z-axis. By the symmetry of the tw
 
 Define `r(t) = |\vec r_1(t)|`, the distance of either body from the origin. Then the distance from the test particle at `(0, 0, z)` to either body is `d = √(r² + z²)`, and the gravitational acceleration of the particle is
 
-$$\ddot z \;=\; -\frac{2\,G m\, z}{(r^2 + z^2)^{3/2}} \,.$$
+$$\ddot z = -\frac{2 G m z}{(r^2 + z^2)^{3/2}}.$$
 
 The motion is therefore completely described by a two-dimensional non-autonomous system:
 
-$$\dot z = v, \qquad \dot v = -\frac{2 G m\, z}{(r^2 + z^2)^{3/2}} .$$
+$$\dot z = v, \quad \dot v = -\frac{2 G m z}{(r^2 + z^2)^{3/2}}.$$
 
 Here `r(t)` is the *exogenous* oscillation of the binary — integrable in closed form via Kepler's equation — and enters the ODE as a time-dependent coefficient.
 
@@ -50,7 +50,7 @@ All numerics use IEEE-754 `double` (JS `Number` / `Float64Array`). No arbitrary-
 
 The relative orbit satisfies Kepler's equation
 
-$$M = E - e \sin E, \qquad M(t) = \pi + 2\pi\!\left(\tau_0 + \frac{t}{T}\right),$$
+$$M = E - e \sin E, \quad M(t) = \pi + 2\pi \left( \tau_0 + \frac{t}{T} \right),$$
 
 with the `+ π` offset chosen so that `(t = 0, τ₀ = 0)` maps to apogee (`E = π`).
 
@@ -67,7 +67,7 @@ until |f / f'| < 1e−14
 
 Convergence is quadratic; in practice 3–5 iterations suffice for `e < 0.95`. The body–origin distance is then
 
-$$r(t) = \tfrac{1}{2}\!\left(1 - e \cos E\right)\!,$$
+$$r(t) = \frac{1}{2} \left( 1 - e \cos E \right),$$
 
 and position in the x–y plane is `(x, y) = ½ · (cos E − e, √(1−e²) · sin E)` (used only by the 3D view).
 
@@ -85,7 +85,7 @@ The integrator retains snapshots of the previous step (`tLast, hLast, yLast, fLa
 
 Each accepted step yields states at `tₙ` and `tₙ + hₙ`. If `z` changes sign across the step, there is exactly one `z = 0` crossing in the interior. To locate it to float64 precision we use a **cubic Hermite interpolant** on the step:
 
-$$\hat z(\theta) = h_{00}(\theta)\,z_n + h\,h_{10}(\theta)\,v_n + h_{01}(\theta)\,z_{n+1} + h\,h_{11}(\theta)\,v_{n+1}$$
+$$\hat z(\theta) = h_{00}(\theta) z_n + h \cdot h_{10}(\theta) v_n + h_{01}(\theta) z_{n+1} + h \cdot h_{11}(\theta) v_{n+1}$$
 
 with the standard Hermite basis polynomials on `θ ∈ [0, 1]`. `\hat z` is 4th-order accurate, which is more than sufficient for root-finding purposes. Starting from the secant estimate `θ₀ = zₙ / (zₙ − zₙ₊₁)`, we run **Newton's method on the interpolant**:
 
