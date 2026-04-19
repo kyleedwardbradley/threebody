@@ -1,5 +1,7 @@
 import { View3D } from './view3d';
 import { PolarPlot } from './polarPlot';
+import { TimePlot } from './timePlot';
+import { PhasePlot } from './phasePlot';
 import { bodyState } from './physics/kepler';
 import SimWorker from './worker?worker';
 import {
@@ -15,6 +17,8 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
 
 const view3d = new View3D($('view3d'));
 const polar = new PolarPlot($<HTMLCanvasElement>('polar-canvas'));
+const phasePlot = new PhasePlot($<HTMLCanvasElement>('phase-canvas'));
+const ztPlot = new TimePlot($<HTMLCanvasElement>('zt-canvas'));
 
 const worker: Worker = new SimWorker();
 
@@ -129,6 +133,8 @@ function restart(): void {
   view3d.setEccentricity(params.e);
   view3d.clearTrail();
   polar.clear();
+  phasePlot.clear();
+  ztPlot.clear();
   updateGhosts();
   send({ type: 'reset', params, speed, autoStart: !isPaused });
   updateButtons();
@@ -225,6 +231,44 @@ function applyTrail(): void {
   polar.setVMax(parseFloat(num.value));
 }
 
+// z(t) plot |z| max ("auto" or a number)
+{
+  const num = $<HTMLInputElement>('zmax-num');
+  const apply = () => {
+    const raw = num.value.trim().toLowerCase();
+    if (raw === '' || raw === 'auto') { ztPlot.setZMax(null); num.value = 'auto'; return; }
+    const n = parseFloat(raw);
+    if (!isFinite(n) || n <= 0) { num.value = 'auto'; ztPlot.setZMax(null); return; }
+    ztPlot.setZMax(n);
+    num.value = n.toString();
+  };
+  num.addEventListener('change', apply);
+  num.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur();
+  });
+  apply();
+}
+
+// Phase portrait axes ("auto" or a number each)
+function bindAxisInput(inputId: string, setter: (v: number | null) => void) {
+  const num = $<HTMLInputElement>(inputId);
+  const apply = () => {
+    const raw = num.value.trim().toLowerCase();
+    if (raw === '' || raw === 'auto') { setter(null); num.value = 'auto'; return; }
+    const n = parseFloat(raw);
+    if (!isFinite(n) || n <= 0) { num.value = 'auto'; setter(null); return; }
+    setter(n);
+    num.value = n.toString();
+  };
+  num.addEventListener('change', apply);
+  num.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur();
+  });
+  apply();
+}
+bindAxisInput('phase-zmax-num', (v) => phasePlot.setZMax(v));
+bindAxisInput('phase-vmax-num', (v) => phasePlot.setVMax(v));
+
 $('run').addEventListener('click', () => {
   isPaused = false;
   send({ type: 'resume' });
@@ -243,10 +287,14 @@ worker.onmessage = (ev: MessageEvent<WorkerToMain>) => {
   switch (m.type) {
     case 'snapshot':
       latestSnap = m.snap;
+      ztPlot.add(m.snap.t, m.snap.z);
       break;
     case 'crossings':
       polar.add(m.items);
       for (const c of m.items) view3d.triggerRipple(c.v);
+      break;
+    case 'poincare':
+      phasePlot.add(m.items);
       break;
     case 'status':
       $('status').textContent =

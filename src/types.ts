@@ -30,9 +30,16 @@ export interface CrossingMsg {
   v: number;
 }
 
+export interface PoincareMsg {
+  t: number;
+  z: number;
+  v: number;
+}
+
 export type WorkerToMain =
   | { type: 'snapshot'; snap: Snapshot }
   | { type: 'crossings'; items: CrossingMsg[] }
+  | { type: 'poincare'; items: PoincareMsg[] }
   | { type: 'done'; count: number }
   | { type: 'escape'; t: number; count: number }
   | { type: 'status'; running: boolean; count: number; t: number };

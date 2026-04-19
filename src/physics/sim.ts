@@ -16,6 +16,12 @@ export interface Crossing {
   v: number;     // z' at crossing (signed)
 }
 
+export interface PoincareSample {
+  t: number;
+  z: number;
+  v: number;
+}
+
 // Threshold beyond which the binary is effectively a point mass at the origin.
 // Orbital radius is ≤ (1+e)/2 ≤ 1; Z_FAR = 10 puts relative error in the
 // potential ~(1/200) — small enough that the asymptotic escape criterion holds.
@@ -27,9 +33,14 @@ export class Sim {
   readonly params: SimParams;
   readonly integrator: DoPri5;
   readonly crossings: Crossing[] = [];
+  readonly poincare: PoincareSample[] = [];
 
   escaped = false;
   escapeTime = 0;
+
+  // Binary phase at which the Poincaré section is sampled (default: apogee, τ = 0).
+  readonly samplePhase = 0;
+  private nextSampleT = 0;
 
   private yInterp = new Float64Array(2);
   private dInterp = new Float64Array(2);
@@ -53,10 +64,20 @@ export class Sim {
       h0: 1e-3,
       hMax: PERIOD / 64, // keep step small enough to resolve orbit features
     });
+
+    // First time t ≥ 0 at which τ = samplePhase.
+    const dtau = ((this.samplePhase - tau0) % 1 + 1) % 1;
+    this.nextSampleT = dtau * PERIOD;
+    if (this.nextSampleT === 0) {
+      this.poincare.push({ t: 0, z: 0, v: v0 });
+      this.nextSampleT = PERIOD;
+    }
   }
 
   // Advance to tEnd (or until max crossings reached, or escape detected).
-  // Returns the new crossings recorded during this call.
+  // Returns the new crossings recorded during this call. Poincaré samples
+  // at fixed binary phase are appended to this.poincare — callers should
+  // check that array length for new items.
   advanceTo(tEnd: number): Crossing[] {
     const I = this.integrator;
     const out: Crossing[] = [];
@@ -72,8 +93,19 @@ export class Sim {
       const zAfter = I.y[0];
       const vAfter = I.y[1];
 
-      // Escape check: particle is far from the origin, moving outward, with
-      // kinetic energy exceeding the asymptotic escape bound ½v² > 1/|z|.
+      // Any Poincaré sample times falling inside this step get interpolated.
+      while (this.nextSampleT <= I.tLast + I.hLast) {
+        const theta = (this.nextSampleT - I.tLast) / I.hLast;
+        I.interp(theta, this.yInterp);
+        this.poincare.push({
+          t: this.nextSampleT,
+          z: this.yInterp[0],
+          v: this.yInterp[1],
+        });
+        this.nextSampleT += PERIOD;
+      }
+
+      // Escape check.
       const absZ = Math.abs(zAfter);
       if (absZ > Z_FAR && vAfter * zAfter > 0 && 0.5 * vAfter * vAfter > 1 / absZ) {
         this.escaped = true;

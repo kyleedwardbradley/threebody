@@ -6,6 +6,7 @@ import {
   type WorkerToMain,
   type Snapshot,
   type CrossingMsg,
+  type PoincareMsg,
 } from './types';
 
 // Baseline: speed=1 ⇒ 1 period per 2 wall seconds ⇒ 0.5 periods/s of sim time.
@@ -23,6 +24,7 @@ let simStart = 0;
 let lastSnapshotAt = 0;
 let lastStatusAt = 0;
 let scheduled = false;
+let poincareSent = 0;
 
 function post(msg: WorkerToMain) { (self as unknown as Worker).postMessage(msg); }
 
@@ -53,6 +55,16 @@ function tick() {
   }
 
   if (fresh.length) post({ type: 'crossings', items: fresh });
+
+  if (sim.poincare.length > poincareSent) {
+    const newItems: PoincareMsg[] = [];
+    for (let i = poincareSent; i < sim.poincare.length; i++) {
+      const s = sim.poincare[i];
+      newItems.push({ t: s.t, z: s.z, v: s.v });
+    }
+    poincareSent = sim.poincare.length;
+    post({ type: 'poincare', items: newItems });
+  }
 
   if (now - lastSnapshotAt >= SNAPSHOT_MS) {
     lastSnapshotAt = now;
@@ -110,8 +122,15 @@ self.onmessage = (ev: MessageEvent<MainToWorker>) => {
       simStart = 0;
       lastSnapshotAt = 0;
       lastStatusAt = 0;
+      poincareSent = 0;
       post({ type: 'snapshot', snap: snapshot() });
       post({ type: 'status', running, count: 0, t: 0 });
+      // Emit any Poincaré sample taken at t=0 right away.
+      if (sim.poincare.length > 0) {
+        const items: PoincareMsg[] = sim.poincare.map((s) => ({ t: s.t, z: s.z, v: s.v }));
+        poincareSent = sim.poincare.length;
+        post({ type: 'poincare', items });
+      }
       if (running) schedule();
       break;
     case 'pause':
