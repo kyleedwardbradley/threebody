@@ -5,7 +5,7 @@ const TRAIL_CAPACITY = 4096;         // absolute buffer upper bound
 const TRAIL_BASE_RGB = [0.4, 1.0, 0.6] as const; // newest-point color
 
 const RIPPLE_DURATION_MS = 450;
-const RIPPLE_GROWTH = 6;             // final scale relative to initial ring
+const RIPPLE_GROWTH = 7;             // final scale relative to initial ring
 const RIPPLE_MAX_ACTIVE = 24;
 const RIPPLE_COLOR_UP = 0x66ff99;
 const RIPPLE_COLOR_DOWN = 0xff6a9a;
@@ -172,7 +172,7 @@ export class View3D {
         this.ripples.splice(i, 1);
         continue;
       }
-      const scale = 1 + age * RIPPLE_GROWTH;
+      const scale = age * RIPPLE_GROWTH;
       r.mesh.scale.set(scale, scale, 1);
       // Ease-out fade (quadratic)
       r.material.opacity = 0.9 * (1 - age) * (1 - age);
