@@ -1,5 +1,6 @@
 import { View3D } from './view3d';
 import { PolarPlot } from './polarPlot';
+import { bodyState } from './physics/kepler';
 import SimWorker from './worker?worker';
 import {
   FAST_SPEED,
@@ -118,10 +119,17 @@ function updateButtons(): void {
   $('pause').classList.toggle('active', isPaused);
 }
 
+function updateGhosts(): void {
+  const g = bodyState(0, params.tau0, params.e);
+  view3d.setGhostPositions(g.x, g.y);
+  view3d.setGhostsVisible(!isFinite(speed));
+}
+
 function restart(): void {
   view3d.setEccentricity(params.e);
   view3d.clearTrail();
   polar.clear();
+  updateGhosts();
   send({ type: 'reset', params, speed, autoStart: !isPaused });
   updateButtons();
 }
@@ -158,6 +166,7 @@ bindNumeric('max', 'max-num',
     if (source !== 'num') num.value = formatSpeed(newSpeed);
     send({ type: 'setSpeed', speed });
     applyTrail();
+    view3d.setGhostsVisible(!isFinite(speed));
   };
   slider.addEventListener('input', () => {
     applySpeed(speedFromIndex(parseInt(slider.value, 10)), 'slider');
@@ -260,5 +269,6 @@ $<HTMLInputElement>('trail-num').value = String(Math.round(trailQuality * 100));
 updateButtons();
 view3d.setEccentricity(params.e);
 applyTrail();
+updateGhosts();
 send({ type: 'reset', params, speed, autoStart: !isPaused });
 requestAnimationFrame(frame);

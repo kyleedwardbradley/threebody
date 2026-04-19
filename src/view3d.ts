@@ -25,6 +25,8 @@ export class View3D {
 
   private body1: THREE.Mesh;
   private body2: THREE.Mesh;
+  private ghost1: THREE.Mesh;
+  private ghost2: THREE.Mesh;
   private particle: THREE.Mesh;
   private orbit1: THREE.Line;
   private orbit2: THREE.Line;
@@ -89,6 +91,16 @@ export class View3D {
     this.body1 = new THREE.Mesh(bodyGeo, bodyMat);
     this.body2 = new THREE.Mesh(bodyGeo, bodyMat);
     this.scene.add(this.body1, this.body2);
+
+    // Ghost markers at initial-phase body positions (shown only at MAX speed).
+    const ghostMat = new THREE.MeshBasicMaterial({
+      color: 0xffcc66, transparent: true, opacity: 0.22, depthWrite: false,
+    });
+    this.ghost1 = new THREE.Mesh(bodyGeo, ghostMat);
+    this.ghost2 = new THREE.Mesh(bodyGeo, ghostMat);
+    this.ghost1.visible = false;
+    this.ghost2.visible = false;
+    this.scene.add(this.ghost1, this.ghost2);
 
     // Particle on z-axis (half the original radius)
     const pMat = new THREE.MeshStandardMaterial({
@@ -177,6 +189,16 @@ export class View3D {
       // Ease-out fade (quadratic)
       r.material.opacity = 0.9 * (1 - age) * (1 - age);
     }
+  }
+
+  setGhostPositions(x: number, y: number): void {
+    this.ghost1.position.set(x, y, 0);
+    this.ghost2.position.set(-x, -y, 0);
+  }
+
+  setGhostsVisible(v: boolean): void {
+    this.ghost1.visible = v;
+    this.ghost2.visible = v;
   }
 
   setEccentricity(e: number): void {
