@@ -1,0 +1,5 @@
+name: threebody
+channels:
+  - conda-forge
+dependencies:
+  - nodejs=20.*

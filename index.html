@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Three-Body z-probe</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <aside id="controls">
+        <h1>Three-Body z-probe</h1>
+
+        <div class="control">
+          <label><span>Eccentricity</span>
+            <input type="text" id="e-num" class="num" min="0" max="0.999" step="0.001" value="0.5" />
+          </label>
+          <input type="range" id="e" min="0" max="0.95" step="0.01" value="0.5" />
+        </div>
+
+        <div class="control">
+          <label><span>Initial z' (v₀)</span>
+            <input type="text" id="v0-num" class="num" step="0.001" value="0.5" />
+          </label>
+          <input type="range" id="v0" min="-2" max="2" step="0.005" value="0.5" />
+        </div>
+
+        <div class="control">
+          <label><span>Initial phase τ₀</span>
+            <input type="text" id="tau0-num" class="num" min="0" max="1" step="0.001" value="0" />
+          </label>
+          <input type="range" id="tau0" min="0" max="1" step="0.001" value="0" />
+        </div>
+
+        <div class="control">
+          <label><span>Max crossings</span>
+            <input type="text" id="max-num" class="num" min="1" step="1" value="1000" />
+          </label>
+          <input type="range" id="max" min="50" max="1000" step="10" value="1000" />
+        </div>
+
+        <div class="control">
+          <label><span>Speed</span>
+            <input type="text" id="speed-num" class="num" value="1.00×" />
+          </label>
+          <input type="range" id="speed" min="0" max="101" step="1" value="35" />
+        </div>
+
+        <div class="control">
+          <label><span>Trail</span>
+            <input type="text" id="trail-num" class="num" min="0" max="100" step="1" value="40" />
+          </label>
+          <input type="range" id="trail" min="0" max="100" step="1" value="40" />
+        </div>
+
+        <div class="buttons">
+          <button id="run">Run</button>
+          <button id="pause">Pause</button>
+          <button id="reset">Reset</button>
+        </div>
+
+        <div id="status">ready</div>
+
+        <p class="legend">
+          <span class="sw up"></span> z' &gt; 0 (up-crossing)<br />
+          <span class="sw dn"></span> z' &lt; 0 (down-crossing)
+        </p>
+        <p class="note">
+          τ = 0 ⇒ bodies at mutual apogee. Speed accepts a number or "max".
+          Changing eccentricity, v₀, τ₀, or max crossings restarts the sim.
+        </p>
+      </aside>
+
+      <main id="main">
+        <div id="view3d"></div>
+        <div id="polar"><canvas id="polar-canvas"></canvas></div>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
