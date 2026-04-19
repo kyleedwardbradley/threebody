@@ -73,7 +73,12 @@
 
       <main id="main">
         <div id="view3d"></div>
-        <div id="polar"><canvas id="polar-canvas"></canvas></div>
+        <div id="polar">
+          <div class="polar-controls">
+            <label>|v| max <input type="text" id="vmax-num" class="num" value="2" /></label>
+          </div>
+          <canvas id="polar-canvas"></canvas>
+        </div>
       </main>
     </div>
     <script type="module" src="/src/main.ts"></script>

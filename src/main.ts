@@ -209,6 +209,22 @@ function applyTrail(): void {
 }
 
 // Buttons
+// Polar plot |v| max
+{
+  const num = $<HTMLInputElement>('vmax-num');
+  const apply = () => {
+    const n = parseFloat(num.value);
+    if (!isFinite(n) || n <= 0) { num.value = polar.getVMax().toString(); return; }
+    polar.setVMax(n);
+    num.value = n.toString();
+  };
+  num.addEventListener('change', apply);
+  num.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur();
+  });
+  polar.setVMax(parseFloat(num.value));
+}
+
 $('run').addEventListener('click', () => {
   isPaused = false;
   send({ type: 'resume' });

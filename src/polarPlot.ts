@@ -1,12 +1,12 @@
 export interface PolarPoint { tau: number; v: number; }
 
 // Polar scatter: θ = 2π·τ (with τ=0 at "top", clockwise through the year),
-// radius = |v|, color encodes sign of v.
+// radius = |v|, color encodes sign of v. Radial axis is user-controlled.
 export class PolarPlot {
   readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
   private points: PolarPoint[] = [];
-  private vMax = 1;                     // axis extent (auto-expanding)
+  private vMax = 2;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -20,18 +20,21 @@ export class PolarPlot {
 
   clear(): void {
     this.points = [];
-    this.vMax = 1;
     this.draw();
   }
 
   add(items: PolarPoint[]): void {
-    for (const p of items) {
-      this.points.push(p);
-      const a = Math.abs(p.v);
-      if (a > this.vMax) this.vMax = a;
-    }
+    for (const p of items) this.points.push(p);
     this.draw();
   }
+
+  setVMax(v: number): void {
+    if (!isFinite(v) || v <= 0) return;
+    this.vMax = v;
+    this.draw();
+  }
+
+  getVMax(): number { return this.vMax; }
 
   private resize(): void {
     const dpr = window.devicePixelRatio || 1;
@@ -57,10 +60,8 @@ export class PolarPlot {
     const R = Math.max(0, Math.min(w, h) / 2 - 28);
     if (R <= 0) return;
 
-    // "nice" radius axis: round vMax up to a tidy value
-    const rMax = niceCeil(this.vMax);
+    const rMax = this.vMax;
 
-    // Rings
     ctx.strokeStyle = '#1e2638';
     ctx.lineWidth = 1;
     ctx.font = '10px -apple-system, system-ui, sans-serif';
@@ -74,7 +75,6 @@ export class PolarPlot {
       ctx.fillText(((rMax * i) / rings).toFixed(2), cx + 3, cy - r - 2);
     }
 
-    // Month radials (τ=0 at top, advancing clockwise)
     ctx.strokeStyle = '#1a2030';
     for (let m = 0; m < 12; m++) {
       const a = angleForTau(m / 12);
@@ -83,7 +83,6 @@ export class PolarPlot {
       ctx.lineTo(cx + R * Math.cos(a), cy + R * Math.sin(a));
       ctx.stroke();
     }
-    // Month letters
     ctx.fillStyle = '#8a8fa5';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -93,10 +92,12 @@ export class PolarPlot {
       ctx.fillText(months[m], cx + (R + 14) * Math.cos(a), cy + (R + 14) * Math.sin(a));
     }
 
-    // Points
+    // Points (clipped to the axis; off-scale samples are dropped)
     for (const p of this.points) {
+      const mag = Math.abs(p.v);
+      if (mag > rMax) continue;
       const a = angleForTau(p.tau);
-      const r = (Math.abs(p.v) / rMax) * R;
+      const r = (mag / rMax) * R;
       const x = cx + r * Math.cos(a);
       const y = cy + r * Math.sin(a);
       ctx.fillStyle = p.v >= 0 ? '#66ff99' : '#ff6a9a';
@@ -105,26 +106,14 @@ export class PolarPlot {
       ctx.fill();
     }
 
-    // Corner labels
     ctx.fillStyle = '#8a8fa5';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     ctx.fillText(`N = ${this.points.length}`, 10, 8);
-    ctx.textAlign = 'right';
-    ctx.fillText(`|v| max = ${rMax.toFixed(3)}`, w - 10, 8);
   }
 }
 
 // τ = 0 → angle = -π/2 (top); increases clockwise.
 function angleForTau(tau: number): number {
   return tau * 2 * Math.PI - Math.PI / 2;
-}
-
-function niceCeil(x: number): number {
-  if (!isFinite(x) || x <= 0) return 1;
-  const exp = Math.floor(Math.log10(x));
-  const base = Math.pow(10, exp);
-  const m = x / base;
-  const nice = m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10;
-  return nice * base;
 }
