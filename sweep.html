@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Three-Body Velocity Sweep</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <nav class="tab-bar">
+      <a href="./index.html" class="tab" data-page="main">Single Orbit</a>
+      <a href="./sweep.html" class="tab active" data-page="sweep">Velocity Sweep</a>
+    </nav>
+    <div id="app" class="with-tabs">
+      <aside id="controls">
+        <h1>Velocity Sweep</h1>
+
+        <div class="control">
+          <label><span>Eccentricity</span>
+            <input type="text" id="e-num" class="num" min="0" max="0.999" step="0.001" value="0.5" />
+          </label>
+          <input type="range" id="e" min="0" max="0.95" step="0.01" value="0.5" />
+        </div>
+
+        <div class="control">
+          <label><span>Initial phase τ₀</span>
+            <input type="text" id="tau0-num" class="num" min="0" max="1" step="0.001" value="0" />
+          </label>
+          <input type="range" id="tau0" min="0" max="1" step="0.001" value="0" />
+        </div>
+
+        <div class="control">
+          <label><span>v₀ min</span>
+            <input type="text" id="v0min-num" class="num" step="0.001" value="0.05" />
+          </label>
+          <input type="range" id="v0min" min="0.01" max="10" step="0.01" value="0.05" />
+        </div>
+
+        <div class="control">
+          <label><span>v₀ max</span>
+            <input type="text" id="v0max-num" class="num" step="0.001" value="2.000" />
+          </label>
+          <input type="range" id="v0max" min="0.01" max="10" step="0.01" value="2" />
+        </div>
+
+        <div class="control">
+          <label><span>Samples N</span>
+            <input type="text" id="n-num" class="num" min="1" step="1" value="2000" />
+          </label>
+          <input type="range" id="n" min="1" max="20000" step="1" value="2000" />
+        </div>
+
+        <div class="control">
+          <label><span>Spacing</span></label>
+          <div class="seg">
+            <button type="button" data-spacing="linear" class="seg-btn active">linear</button>
+            <button type="button" data-spacing="log" class="seg-btn">log</button>
+          </div>
+        </div>
+
+        <div class="control">
+          <label><span>Max time (periods)</span>
+            <input type="text" id="tmax-num" class="num" min="1" step="1" value="5" />
+          </label>
+          <input type="range" id="tmax" min="1" max="20" step="1" value="5" />
+        </div>
+
+        <div class="control">
+          <label><span>Plot style</span></label>
+          <div class="seg">
+            <button type="button" data-mode="scatter" class="seg-btn active">scatter</button>
+            <button type="button" data-mode="line" class="seg-btn">line</button>
+          </div>
+        </div>
+
+        <div class="control">
+          <label><span>Dot size</span>
+            <input type="text" id="dot-num" class="num" step="0.1" value="1.7" />
+          </label>
+          <input type="range" id="dot" min="0.5" max="6" step="0.1" value="1.7" />
+        </div>
+
+        <div class="control">
+          <label><span>Colour</span></label>
+          <div class="seg">
+            <button type="button" data-color="v0" class="seg-btn active">v₀</button>
+            <button type="button" data-color="time" class="seg-btn">t*</button>
+          </div>
+        </div>
+
+        <div class="buttons">
+          <button id="run">Run</button>
+          <button id="pause">Pause</button>
+          <button id="reset">Reset</button>
+        </div>
+
+        <div id="status">ready</div>
+
+        <p class="legend">
+          Colour: <span id="color-legend">v₀ (purple → yellow)</span><br />
+          <span class="sw esc"></span> escaped (outer ring)
+        </p>
+        <p class="note">
+          One dot per shot: angle = first-return phase τ*, radius = v₀.
+          Shots that never return within Max time land on the outer ring at
+          their final phase.
+        </p>
+      </aside>
+
+      <main id="main" class="single-pane">
+        <div id="polar">
+          <canvas id="polar-canvas"></canvas>
+        </div>
+      </main>
+    </div>
+    <script type="module" src="/src/sweep.ts"></script>
+  </body>
+</html>

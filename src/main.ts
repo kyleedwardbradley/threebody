@@ -143,7 +143,7 @@ function restart(): void {
 // eccentricity
 bindNumeric('e', 'e-num',
   { toNum: (v) => v.toFixed(3), clamp: (v) => Math.max(0, Math.min(0.999, v)) },
-  (v) => { params.e = v; restart(); });
+  (v) => { params.e = v; updateTabLinks(); restart(); });
 
 // v0 (allow |v| > slider range via number input)
 bindNumeric('v0', 'v0-num',
@@ -153,7 +153,7 @@ bindNumeric('v0', 'v0-num',
 // tau0
 bindNumeric('tau0', 'tau0-num',
   { toNum: (v) => v.toFixed(3), clamp: (v) => ((v % 1) + 1) % 1 },
-  (v) => { params.tau0 = v; restart(); });
+  (v) => { params.tau0 = v; updateTabLinks(); restart(); });
 
 // max crossings
 bindNumeric('max', 'max-num',
@@ -323,6 +323,17 @@ params.maxCrossings = parseInt($<HTMLInputElement>('max').value, 10);
 speed = speedFromIndex(parseInt($<HTMLInputElement>('speed').value, 10));
 trailQuality = parseInt($<HTMLInputElement>('trail').value, 10) / 100;
 
+// Apply URL query overrides (?e=&tau0=) carried in from the sibling page.
+{
+  const p = new URLSearchParams(window.location.search);
+  const eq = parseFloat(p.get('e') ?? '');
+  const tq = parseFloat(p.get('tau0') ?? '');
+  if (isFinite(eq)) params.e = Math.max(0, Math.min(0.999, eq));
+  if (isFinite(tq)) params.tau0 = ((tq % 1) + 1) % 1;
+  $<HTMLInputElement>('e').value = String(params.e);
+  $<HTMLInputElement>('tau0').value = String(params.tau0);
+}
+
 $<HTMLInputElement>('e-num').value = params.e.toFixed(3);
 $<HTMLInputElement>('v0-num').value = params.v0.toFixed(3);
 $<HTMLInputElement>('tau0-num').value = params.tau0.toFixed(3);
@@ -330,7 +341,20 @@ $<HTMLInputElement>('max-num').value = params.maxCrossings.toString();
 $<HTMLInputElement>('speed-num').value = formatSpeed(speed);
 $<HTMLInputElement>('trail-num').value = String(Math.round(trailQuality * 100));
 
+function updateTabLinks(): void {
+  const q = new URLSearchParams();
+  q.set('e', params.e.toFixed(4));
+  q.set('tau0', params.tau0.toFixed(4));
+  const search = '?' + q.toString();
+  for (const a of Array.from(document.querySelectorAll<HTMLAnchorElement>('.tab-bar a'))) {
+    const href = a.getAttribute('href') ?? '';
+    const base = href.split('?')[0];
+    a.setAttribute('href', base + search);
+  }
+}
+
 updateButtons();
+updateTabLinks();
 view3d.setEccentricity(params.e);
 applyTrail();
 updateGhosts();

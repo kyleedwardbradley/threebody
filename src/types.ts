@@ -43,3 +43,34 @@ export type WorkerToMain =
   | { type: 'done'; count: number }
   | { type: 'escape'; t: number; count: number }
   | { type: 'status'; running: boolean; count: number; t: number };
+
+// ----- Velocity-sweep page -----
+
+export interface SweepRequest {
+  e: number;
+  tau0: number;
+  v0Min: number;
+  v0Max: number;
+  n: number;
+  spacing: 'linear' | 'log';
+  maxPeriods: number;
+}
+
+export interface SweepResult {
+  v0: number;
+  t: number;       // first-return time (non-modulo, sim units)
+  tau: number;     // first-return phase = frac(tau0 + t/T)
+  v: number;       // signed velocity at first return
+  escaped: boolean;
+}
+
+export type SweepMainToWorker =
+  | { type: 'start'; req: SweepRequest }
+  | { type: 'shoot'; e: number; tau0: number; maxPeriods: number; v0s: number[] }
+  | { type: 'stop' };
+
+export type SweepWorkerToMain =
+  | { type: 'progress'; done: number; total: number }
+  | { type: 'result'; items: SweepResult[] }
+  | { type: 'shotResults'; items: SweepResult[] }
+  | { type: 'done' };
