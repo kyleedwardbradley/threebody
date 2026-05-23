@@ -26,8 +26,127 @@ const cfg: Cfg = {
 };
 
 let worker: Worker | null = null;
-type Phase = 'idle' | 'grid' | 'sector';
+type Phase = 'idle' | 'grid' | 'sector-initial' | 'sector-refining';
 let phase: Phase = 'idle';
+
+// ---------- Sector image: polygon + adaptive refinement ----------
+
+interface PolygonNode {
+  s: number;          // boundary parameter ∈ [0, 4) (edge id is floor(s))
+  tau0: number;       // input domain coords
+  v0: number;
+  tau: number;        // output codomain (NaN if escaped)
+  v: number;
+  escaped: boolean;
+}
+
+interface Gap {
+  sA: number; sB: number;     // effective bounds (sB > sA, may exceed 4 for wrap)
+  ax: number; ay: number;     // screen coords of endpoints
+  bx: number; by: number;
+  dist: number;               // screen pixels
+}
+
+interface PendingGap {
+  gap: Gap;
+  sMid: number;               // effective midpoint (may exceed 4 for wrap)
+  tau0: number; v0: number;
+}
+
+const polygonNodes: PolygonNode[] = [];   // sorted by s in [0, 4)
+const heap: Gap[] = [];                   // max-heap on dist
+let pending: PendingGap[] = [];
+const REFINE_BATCH = 32;
+const THRESHOLD_PX = 1;
+let refineCap = 50_000;
+
+function boundaryParam(s: number, c = cfg): { tau0: number; v0: number } {
+  const sm = ((s % 4) + 4) % 4;
+  const edge = Math.floor(sm) % 4;
+  const t = sm - edge;
+  switch (edge) {
+    case 0: return { tau0: c.tauS, v0: c.vS + (c.vE - c.vS) * t };
+    case 1: return { tau0: c.tauS + (c.tauE - c.tauS) * t, v0: c.vE };
+    case 2: return { tau0: c.tauE, v0: c.vE + (c.vS - c.vE) * t };
+    default: return { tau0: c.tauE + (c.tauS - c.tauE) * t, v0: c.vS };
+  }
+}
+
+function screenXY(tau: number, v: number): { x: number; y: number } {
+  const g = canvas.getDiscGeometry();
+  const r = (v / g.vMax) * g.R;
+  const a = tau * 2 * Math.PI - Math.PI / 2;
+  return { x: g.cx + r * Math.cos(a), y: g.cy + r * Math.sin(a) };
+}
+
+// Max-heap on Gap.dist.
+function hPush(g: Gap): void {
+  heap.push(g);
+  let i = heap.length - 1;
+  while (i > 0) {
+    const p = (i - 1) >>> 1;
+    if (heap[p].dist >= heap[i].dist) break;
+    [heap[p], heap[i]] = [heap[i], heap[p]];
+    i = p;
+  }
+}
+function hPop(): Gap | undefined {
+  if (heap.length === 0) return undefined;
+  const top = heap[0];
+  const last = heap.pop()!;
+  if (heap.length > 0) {
+    heap[0] = last;
+    let i = 0;
+    for (;;) {
+      const l = 2 * i + 1, r = l + 1;
+      let m = i;
+      if (l < heap.length && heap[l].dist > heap[m].dist) m = l;
+      if (r < heap.length && heap[r].dist > heap[m].dist) m = r;
+      if (m === i) break;
+      [heap[m], heap[i]] = [heap[i], heap[m]];
+      i = m;
+    }
+  }
+  return top;
+}
+function hPeek(): Gap | undefined { return heap[0]; }
+
+function insertSorted(node: PolygonNode): void {
+  let lo = 0, hi = polygonNodes.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (polygonNodes[mid].s < node.s) lo = mid + 1; else hi = mid;
+  }
+  polygonNodes.splice(lo, 0, node);
+}
+
+function pushGapMaybe(a: PolygonNode, b: PolygonNode, sA: number, sBEff: number): void {
+  if (a.escaped || b.escaped) return;
+  const pa = screenXY(a.tau, a.v);
+  const pb = screenXY(b.tau, b.v);
+  const dx = pb.x - pa.x, dy = pb.y - pa.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist <= THRESHOLD_PX) return;
+  hPush({ sA, sB: sBEff, ax: pa.x, ay: pa.y, bx: pb.x, by: pb.y, dist });
+}
+
+function buildInitialHeap(): void {
+  heap.length = 0;
+  const n = polygonNodes.length;
+  if (n < 2) return;
+  for (let i = 0; i < n; i++) {
+    const a = polygonNodes[i];
+    const b = polygonNodes[(i + 1) % n];
+    const sBEff = (i === n - 1) ? b.s + 4 : b.s;
+    pushGapMaybe(a, b, a.s, sBEff);
+  }
+}
+
+function redrawPolygon(): void {
+  canvas.setPolygon(polygonNodes.map((n) => ({
+    tau: n.tau, v: n.v, escaped: n.escaped,
+  })));
+}
 
 // ---------- bindNumeric (shared pattern) ----------
 
@@ -69,7 +188,7 @@ bindNumeric('e', 'e-num',
 
 bindNumeric('vmax', 'vmax-num',
   { toNum: (v) => v.toFixed(3), clamp: (v) => Math.max(0.01, v) },
-  (v) => { cfg.vMax = v; updateSectorDisplay(); });
+  (v) => { cfg.vMax = v; canvas.setVMax(v); updateSectorDisplay(); });
 
 bindNumeric('tmax', 'tmax-num',
   { toNum: (v) => Math.round(v).toString(),
@@ -111,6 +230,9 @@ $('reset').addEventListener('click', () => {
   stopAll();
   canvas.clearGrid();
   canvas.setPolygon(null);
+  polygonNodes.length = 0;
+  heap.length = 0;
+  pending = [];
   $('status').textContent = 'ready';
 });
 
@@ -128,11 +250,20 @@ function killWorker(): void {
 }
 
 function stopAll(): void {
-  if (!worker) { phase = 'idle'; return; }
-  const m: HorseshoeMainToWorker = { type: 'stop' };
-  worker.postMessage(m);
-  killWorker();
-  phase = 'idle';
+  const wasRefining = phase === 'sector-refining' || phase === 'sector-initial';
+  if (worker) {
+    const m: HorseshoeMainToWorker = { type: 'stop' };
+    worker.postMessage(m);
+    killWorker();
+  }
+  if (wasRefining) {
+    phase = 'idle';
+    redrawPolygon();
+    $('status').textContent = `sector image stopped.  N=${polygonNodes.length}`;
+  } else {
+    phase = 'idle';
+  }
+  pending = [];
 }
 
 function runGrid(): void {
@@ -148,43 +279,79 @@ function runGrid(): void {
   $('status').textContent = `grid… 0 / ${cfg.n}`;
 }
 
+// Initial inputs (4K samples around the boundary) with their s parameters.
+let initialInputs: { s: number; tau0: number; v0: number }[] = [];
+
 function runSector(): void {
   if (phase !== 'idle') return;
-  // Build the four edges, each with K samples. Walk the rectangle's
-  // boundary in order so the resulting list traces a closed polygon.
-  const K = Math.max(4, Math.round(cfg.k));
-  const inputs: { tau0: number; v0: number }[] = [];
-  // Edge A: τ = tauS, v: vS → vE
-  for (let k = 0; k <= K; k++) {
-    const t = k / K;
-    inputs.push({ tau0: cfg.tauS, v0: cfg.vS + (cfg.vE - cfg.vS) * t });
-  }
-  // Edge B: v = vE, τ: tauS → tauE (no wrap; user picks adjacent τs)
-  for (let k = 1; k <= K; k++) {
-    const t = k / K;
-    inputs.push({ tau0: cfg.tauS + (cfg.tauE - cfg.tauS) * t, v0: cfg.vE });
-  }
-  // Edge C: τ = tauE, v: vE → vS
-  for (let k = 1; k <= K; k++) {
-    const t = k / K;
-    inputs.push({ tau0: cfg.tauE, v0: cfg.vE + (cfg.vS - cfg.vE) * t });
-  }
-  // Edge D: v = vS, τ: tauE → tauS
-  for (let k = 1; k <= K; k++) {
-    const t = k / K;
-    inputs.push({ tau0: cfg.tauE + (cfg.tauS - cfg.tauE) * t, v0: cfg.vS });
-  }
-  const tau0s = inputs.map((p) => p.tau0);
-  const v0s = inputs.map((p) => p.v0);
+  canvas.setVMax(cfg.vMax);
+  polygonNodes.length = 0;
+  heap.length = 0;
+  pending = [];
 
+  const K = Math.max(4, Math.round(cfg.k));
+  // Walk the rectangle boundary at s = 0, 1/K, ..., 4 - 1/K (4K samples).
+  // No duplicate corner point; the closing gap (last → first) is the wrap.
+  initialInputs = [];
+  for (let edge = 0; edge < 4; edge++) {
+    for (let k = 0; k < K; k++) {
+      const s = edge + k / K;
+      const p = boundaryParam(s);
+      initialInputs.push({ s, tau0: p.tau0, v0: p.v0 });
+    }
+  }
+  refineCap = Math.min(50_000, Math.max(2000, 50 * initialInputs.length));
+
+  const tau0s = initialInputs.map((p) => p.tau0);
+  const v0s = initialInputs.map((p) => p.v0);
   const w = ensureWorker();
   const m: HorseshoeMainToWorker = {
     type: 'shoot',
     req: { e: cfg.e, maxPeriods: cfg.maxPeriods, tau0s, v0s },
   };
   w.postMessage(m);
-  phase = 'sector';
-  $('status').textContent = `tracing sector… ${inputs.length} shots`;
+  phase = 'sector-initial';
+  $('status').textContent = `tracing sector… ${initialInputs.length} shots`;
+}
+
+function refineStep(): void {
+  if (!worker || phase !== 'sector-refining') return;
+  if (polygonNodes.length >= refineCap) { refineDone('cap'); return; }
+  const top = hPeek();
+  if (!top || top.dist <= THRESHOLD_PX) { refineDone('threshold'); return; }
+
+  pending = [];
+  const tau0s: number[] = [];
+  const v0s: number[] = [];
+  const remaining = refineCap - polygonNodes.length;
+  const batchTarget = Math.min(REFINE_BATCH, remaining);
+  while (pending.length < batchTarget) {
+    const g = hPop();
+    if (!g) break;
+    if (g.dist <= THRESHOLD_PX) break;
+    const sMid = 0.5 * (g.sA + g.sB);
+    const { tau0, v0 } = boundaryParam(sMid);
+    pending.push({ gap: g, sMid, tau0, v0 });
+    tau0s.push(tau0);
+    v0s.push(v0);
+  }
+  if (pending.length === 0) { refineDone('threshold'); return; }
+  const m: HorseshoeMainToWorker = {
+    type: 'shoot',
+    req: { e: cfg.e, maxPeriods: cfg.maxPeriods, tau0s, v0s },
+  };
+  worker.postMessage(m);
+  $('status').textContent =
+    `refining sector image… N=${polygonNodes.length}  longest=${top.dist.toFixed(1)}px`;
+}
+
+function refineDone(reason: 'threshold' | 'cap' | 'stopped'): void {
+  phase = 'idle';
+  redrawPolygon();
+  killWorker();
+  const tag = reason === 'cap' ? ` (hit ${refineCap}-pt cap)` :
+              reason === 'stopped' ? ' (stopped)' : '';
+  $('status').textContent = `sector image done.  N=${polygonNodes.length}${tag}`;
 }
 
 function onWorkerMsg(ev: MessageEvent<HorseshoeWorkerToMain>): void {
@@ -203,19 +370,60 @@ function onWorkerMsg(ev: MessageEvent<HorseshoeWorkerToMain>): void {
       break;
     case 'shotResults': {
       const { tauStars, vStars, escapes } = m.msg;
-      const pts: PolygonPoint[] = [];
-      for (let i = 0; i < tauStars.length; i++) {
-        pts.push({
-          tau: tauStars[i],
-          v: vStars[i],
-          escaped: escapes[i] === 1,
-        });
+      if (phase === 'sector-initial') {
+        // Build polygon nodes from initial 4K samples, then start refinement.
+        polygonNodes.length = 0;
+        for (let i = 0; i < initialInputs.length; i++) {
+          const inp = initialInputs[i];
+          polygonNodes.push({
+            s: inp.s, tau0: inp.tau0, v0: inp.v0,
+            tau: tauStars[i], v: vStars[i],
+            escaped: escapes[i] === 1,
+          });
+        }
+        // polygonNodes is already sorted by s (we built it in order).
+        redrawPolygon();
+        phase = 'sector-refining';
+        buildInitialHeap();
+        refineStep();
+      } else if (phase === 'sector-refining') {
+        // Pair results with pending gaps; insert midpoints, push sub-gaps.
+        for (let i = 0; i < pending.length; i++) {
+          const p = pending[i];
+          const tau = tauStars[i];
+          const v = vStars[i];
+          const esc = escapes[i] === 1;
+          const sActual = ((p.sMid % 4) + 4) % 4;
+          const node: PolygonNode = {
+            s: sActual, tau0: p.tau0, v0: p.v0,
+            tau, v, escaped: esc,
+          };
+          insertSorted(node);
+          if (esc) continue;
+          const mid = screenXY(tau, v);
+          const dxA = mid.x - p.gap.ax, dyA = mid.y - p.gap.ay;
+          const distA = Math.hypot(dxA, dyA);
+          if (distA > THRESHOLD_PX) {
+            hPush({
+              sA: p.gap.sA, sB: p.sMid,
+              ax: p.gap.ax, ay: p.gap.ay, bx: mid.x, by: mid.y,
+              dist: distA,
+            });
+          }
+          const dxB = p.gap.bx - mid.x, dyB = p.gap.by - mid.y;
+          const distB = Math.hypot(dxB, dyB);
+          if (distB > THRESHOLD_PX) {
+            hPush({
+              sA: p.sMid, sB: p.gap.sB,
+              ax: mid.x, ay: mid.y, bx: p.gap.bx, by: p.gap.by,
+              dist: distB,
+            });
+          }
+        }
+        pending = [];
+        redrawPolygon();
+        refineStep();
       }
-      canvas.setPolygon(pts);
-      phase = 'idle';
-      killWorker();
-      const nEsc = pts.reduce((s, p) => s + (p.escaped ? 1 : 0), 0);
-      $('status').textContent = `sector image: ${pts.length} pts, ${nEsc} escaped`;
       break;
     }
     case 'stopped':
@@ -272,4 +480,5 @@ cfg.k = parseInt($<HTMLInputElement>('k').value, 10);
 
 readQuery();
 updateTabLinks();
+canvas.setVMax(cfg.vMax);
 updateSectorDisplay();

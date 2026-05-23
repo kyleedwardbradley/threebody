@@ -79,6 +79,23 @@ export class HorseshoeCanvas {
 
   setSector(s: SectorRect | null): void { this.sector = s; this.draw(); }
   setPolygon(pts: PolygonPoint[] | null): void { this.polygon = pts; this.draw(); }
+  setVMax(v: number): void {
+    if (!isFinite(v) || v <= 0) return;
+    this.vMax = v;
+    this.draw();
+  }
+
+  // Geometry for screen-space gap measurement in the refinement loop.
+  getDiscGeometry(): { cx: number; cy: number; R: number; vMax: number } {
+    const w = this.canvas.clientWidth;
+    const h = this.canvas.clientHeight;
+    return {
+      cx: w / 2,
+      cy: h / 2,
+      R: Math.max(0, Math.min(w, h) / 2 - 28),
+      vMax: this.vMax,
+    };
+  }
 
   // ----- size -----
 
