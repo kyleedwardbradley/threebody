@@ -26,8 +26,17 @@ const cfg: Cfg = {
 };
 
 let worker: Worker | null = null;
-type Phase = 'idle' | 'grid' | 'sector-initial' | 'sector-refining';
+type Phase = 'idle' | 'grid'
+  | 'sector-spirals'   // shooting the two τ-spirals at matched v
+  | 'sector-edges'     // shooting top + bottom connectors at the effective vE
+  | 'sector-refining'; // priority-queue refinement on the closed boundary
 let phase: Phase = 'idle';
+
+// Effective vE — clamped down from cfg.vE if either τ-spiral escapes
+// before reaching cfg.vE. Polygon and overlay both use this.
+let effVE: number = 0;
+let spiralK = 0;   // K for the most recent spiral request
+let edgeKtau = 0;  // K for the most recent top/bottom edge request
 
 // ---------- Sector image: polygon + adaptive refinement ----------
 
@@ -60,15 +69,21 @@ const REFINE_BATCH = 32;
 const THRESHOLD_PX = 1;
 let refineCap = 50_000;
 
-function boundaryParam(s: number, c = cfg): { tau0: number; v0: number } {
+// Boundary parameter s ∈ [0, 4):
+//   edge 0 (s∈[0,1)): left spiral  τ=tauS, v: vS → effVE
+//   edge 1 (s∈[1,2)): top connect  v=effVE, τ: tauS → tauE
+//   edge 2 (s∈[2,3)): right spiral τ=tauE, v: effVE → vS
+//   edge 3 (s∈[3,4)): bottom       v=vS, τ: tauE → tauS
+function boundaryParam(s: number): { tau0: number; v0: number } {
+  const vUpper = effVE > 0 ? effVE : cfg.vE;
   const sm = ((s % 4) + 4) % 4;
   const edge = Math.floor(sm) % 4;
   const t = sm - edge;
   switch (edge) {
-    case 0: return { tau0: c.tauS, v0: c.vS + (c.vE - c.vS) * t };
-    case 1: return { tau0: c.tauS + (c.tauE - c.tauS) * t, v0: c.vE };
-    case 2: return { tau0: c.tauE, v0: c.vE + (c.vS - c.vE) * t };
-    default: return { tau0: c.tauE + (c.tauS - c.tauE) * t, v0: c.vS };
+    case 0: return { tau0: cfg.tauS, v0: cfg.vS + (vUpper - cfg.vS) * t };
+    case 1: return { tau0: cfg.tauS + (cfg.tauE - cfg.tauS) * t, v0: vUpper };
+    case 2: return { tau0: cfg.tauE, v0: vUpper + (cfg.vS - vUpper) * t };
+    default: return { tau0: cfg.tauE + (cfg.tauS - cfg.tauE) * t, v0: cfg.vS };
   }
 }
 
@@ -238,6 +253,8 @@ $('reset').addEventListener('click', () => {
   polygonNodes.length = 0;
   heap.length = 0;
   pending = [];
+  effVE = 0;
+  updateSectorDisplay();
   $('status').textContent = 'ready';
 });
 
@@ -255,13 +272,13 @@ function killWorker(): void {
 }
 
 function stopAll(): void {
-  const wasRefining = phase === 'sector-refining' || phase === 'sector-initial';
+  const wasSector = phase === 'sector-spirals' || phase === 'sector-edges' || phase === 'sector-refining';
   if (worker) {
     const m: HorseshoeMainToWorker = { type: 'stop' };
     worker.postMessage(m);
     killWorker();
   }
-  if (wasRefining) {
+  if (wasSector) {
     phase = 'idle';
     redrawPolygon();
     $('status').textContent = `sector image stopped.  N=${polygonNodes.length}`;
@@ -284,39 +301,144 @@ function runGrid(): void {
   $('status').textContent = `grid… 0 / ${cfg.n}`;
 }
 
-// Initial inputs (4K samples around the boundary) with their s parameters.
-let initialInputs: { s: number; tau0: number; v0: number }[] = [];
-
 function runSector(): void {
   if (phase !== 'idle') return;
   canvas.setVMax(cfg.vMax);
   polygonNodes.length = 0;
   heap.length = 0;
   pending = [];
+  effVE = cfg.vE;          // start optimistic; may shrink after spirals come back
+  updateSectorDisplay();   // show the user's full sector while we work
 
   const K = Math.max(4, Math.round(cfg.k));
-  // Walk the rectangle boundary at s = 0, 1/K, ..., 4 - 1/K (4K samples).
-  // No duplicate corner point; the closing gap (last → first) is the wrap.
-  initialInputs = [];
-  for (let edge = 0; edge < 4; edge++) {
-    for (let k = 0; k < K; k++) {
-      const s = edge + k / K;
-      const p = boundaryParam(s);
-      initialInputs.push({ s, tau0: p.tau0, v0: p.v0 });
-    }
-  }
-  refineCap = Math.min(50_000, Math.max(2000, 50 * initialInputs.length));
+  spiralK = K;
+  refineCap = Math.min(50_000, Math.max(2000, 50 * 4 * K));
 
-  const tau0s = initialInputs.map((p) => p.tau0);
-  const v0s = initialInputs.map((p) => p.v0);
+  // Shoot 2K samples: K at τ=tauS, K at τ=tauE, both at matched v values
+  // from vS to cfg.vE.
+  const tau0s: number[] = [];
+  const v0s: number[] = [];
+  for (let k = 0; k < K; k++) {
+    const v = cfg.vS + (cfg.vE - cfg.vS) * (K === 1 ? 0 : k / (K - 1));
+    tau0s.push(cfg.tauS); v0s.push(v);
+  }
+  for (let k = 0; k < K; k++) {
+    const v = cfg.vS + (cfg.vE - cfg.vS) * (K === 1 ? 0 : k / (K - 1));
+    tau0s.push(cfg.tauE); v0s.push(v);
+  }
   const w = ensureWorker();
-  const m: HorseshoeMainToWorker = {
+  w.postMessage({
     type: 'shoot',
     req: { e: cfg.e, maxPeriods: cfg.maxPeriods, tau0s, v0s },
-  };
-  w.postMessage(m);
-  phase = 'sector-initial';
-  $('status').textContent = `tracing sector… ${initialInputs.length} shots`;
+  });
+  phase = 'sector-spirals';
+  $('status').textContent = `tracing two τ-spirals (matched v)… ${2 * K} shots`;
+}
+
+function consumeSpiralResults(
+  tauStars: Float32Array, vStars: Float32Array, escapes: Uint8Array,
+): void {
+  const K = spiralK;
+  // Find first k where either spiral escapes — that bounds effective vE.
+  let escIdx = K;
+  for (let k = 0; k < K; k++) {
+    if (escapes[k] === 1 || escapes[K + k] === 1) { escIdx = k; break; }
+  }
+  if (escIdx === 0) {
+    phase = 'idle';
+    killWorker();
+    $('status').textContent =
+      'sector image: every spiral sample escaped — lower vS, narrow τ range, or pick a smaller sector';
+    return;
+  }
+  const validCount = escIdx; // 0..validCount-1 are valid
+  effVE = (K === 1)
+    ? cfg.vS
+    : cfg.vS + (cfg.vE - cfg.vS) * (validCount - 1) / (K - 1);
+  updateSectorDisplay();
+
+  // Build the two spiral edges into polygonNodes.
+  polygonNodes.length = 0;
+  // Left spiral (edge 0, s ∈ [0, 1)).
+  for (let k = 0; k < validCount; k++) {
+    const v0 = cfg.vS + (cfg.vE - cfg.vS) * (k / (K - 1));
+    const s = validCount <= 1 ? 0 : k / validCount;
+    polygonNodes.push({
+      s, tau0: cfg.tauS, v0,
+      tau: tauStars[k], v: vStars[k], escaped: false,
+    });
+  }
+  // Right spiral (edge 2, s ∈ [2, 3)) — walks effVE → vS in boundary order,
+  // so node k of the walk corresponds to input index (validCount - 1 - k).
+  for (let k = 0; k < validCount; k++) {
+    const inputIdx = validCount - 1 - k;
+    const v0 = cfg.vS + (cfg.vE - cfg.vS) * (inputIdx / (K - 1));
+    const s = validCount <= 1 ? 2 : 2 + k / validCount;
+    polygonNodes.push({
+      s, tau0: cfg.tauE, v0,
+      tau: tauStars[K + inputIdx], v: vStars[K + inputIdx],
+      escaped: false,
+    });
+  }
+
+  // Now shoot top (v=effVE) and bottom (v=vS) connectors.
+  const Kt = K;
+  edgeKtau = Kt;
+  const t0s: number[] = [];
+  const v0s: number[] = [];
+  for (let k = 0; k < Kt; k++) {
+    const t = Kt === 1 ? 0.5 : k / (Kt - 1);
+    t0s.push(cfg.tauS + (cfg.tauE - cfg.tauS) * t);
+    v0s.push(effVE);
+  }
+  for (let k = 0; k < Kt; k++) {
+    const t = Kt === 1 ? 0.5 : k / (Kt - 1);
+    t0s.push(cfg.tauE + (cfg.tauS - cfg.tauE) * t);
+    v0s.push(cfg.vS);
+  }
+  const w = ensureWorker();
+  w.postMessage({
+    type: 'shoot',
+    req: { e: cfg.e, maxPeriods: cfg.maxPeriods, tau0s: t0s, v0s },
+  });
+  phase = 'sector-edges';
+  const truncMsg = validCount < K
+    ? ` (effVE=${effVE.toFixed(4)} from cfg vE=${cfg.vE.toFixed(4)})`
+    : '';
+  $('status').textContent = `tracing top/bottom edges… ${2 * Kt} shots${truncMsg}`;
+}
+
+function consumeEdgeResults(
+  tauStars: Float32Array, vStars: Float32Array, escapes: Uint8Array,
+): void {
+  const K = edgeKtau;
+  // Top edge (s ∈ [1, 2)).
+  for (let k = 0; k < K; k++) {
+    const t = K === 1 ? 0.5 : k / (K - 1);
+    const s = 1 + k / K; // strictly < 2
+    polygonNodes.push({
+      s,
+      tau0: cfg.tauS + (cfg.tauE - cfg.tauS) * t, v0: effVE,
+      tau: tauStars[k], v: vStars[k],
+      escaped: escapes[k] === 1,
+    });
+  }
+  // Bottom edge (s ∈ [3, 4)).
+  for (let k = 0; k < K; k++) {
+    const t = K === 1 ? 0.5 : k / (K - 1);
+    const s = 3 + k / K;
+    polygonNodes.push({
+      s,
+      tau0: cfg.tauE + (cfg.tauS - cfg.tauE) * t, v0: cfg.vS,
+      tau: tauStars[K + k], v: vStars[K + k],
+      escaped: escapes[K + k] === 1,
+    });
+  }
+  polygonNodes.sort((a, b) => a.s - b.s);
+  redrawPolygon();
+  phase = 'sector-refining';
+  buildInitialHeap();
+  refineStep();
 }
 
 function refineStep(): void {
@@ -375,22 +497,10 @@ function onWorkerMsg(ev: MessageEvent<HorseshoeWorkerToMain>): void {
       break;
     case 'shotResults': {
       const { tauStars, vStars, escapes } = m.msg;
-      if (phase === 'sector-initial') {
-        // Build polygon nodes from initial 4K samples, then start refinement.
-        polygonNodes.length = 0;
-        for (let i = 0; i < initialInputs.length; i++) {
-          const inp = initialInputs[i];
-          polygonNodes.push({
-            s: inp.s, tau0: inp.tau0, v0: inp.v0,
-            tau: tauStars[i], v: vStars[i],
-            escaped: escapes[i] === 1,
-          });
-        }
-        // polygonNodes is already sorted by s (we built it in order).
-        redrawPolygon();
-        phase = 'sector-refining';
-        buildInitialHeap();
-        refineStep();
+      if (phase === 'sector-spirals') {
+        consumeSpiralResults(tauStars, vStars, escapes);
+      } else if (phase === 'sector-edges') {
+        consumeEdgeResults(tauStars, vStars, escapes);
       } else if (phase === 'sector-refining') {
         // Pair results with pending gaps; insert midpoints, push sub-gaps.
         for (let i = 0; i < pending.length; i++) {
@@ -441,8 +551,11 @@ function onWorkerMsg(ev: MessageEvent<HorseshoeWorkerToMain>): void {
 // ---------- Sector display ----------
 
 function updateSectorDisplay(): void {
+  // After a sector compute we know effVE — clamp the displayed sector's vE
+  // to it so the blue overlay matches the polygon's effective input range.
+  const top = effVE > 0 ? Math.min(effVE, cfg.vE) : cfg.vE;
   const s: SectorRect = {
-    tauS: cfg.tauS, tauE: cfg.tauE, vS: cfg.vS, vE: cfg.vE,
+    tauS: cfg.tauS, tauE: cfg.tauE, vS: cfg.vS, vE: top,
   };
   canvas.setSector(s);
 }
