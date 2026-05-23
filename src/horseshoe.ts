@@ -21,7 +21,7 @@ interface Cfg {
   k: number;
 }
 const cfg: Cfg = {
-  e: 0.5, vMax: 1.0, maxPeriods: 5, n: 100,
+  e: 0.5, vMax: 10, maxPeriods: 5, n: 100,
   tauS: 0.10, tauE: 0.18, vS: 0.30, vE: 0.60, k: 80,
 };
 
