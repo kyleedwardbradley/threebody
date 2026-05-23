@@ -245,6 +245,11 @@ $('toggle-grid').addEventListener('click', () => {
   canvas.setShowGrid(next);
   $('toggle-grid').textContent = next ? 'Hide grid' : 'Show grid';
 });
+$('toggle-image').addEventListener('click', () => {
+  const next = !canvas.getShowImage();
+  canvas.setShowImage(next);
+  $('toggle-image').textContent = next ? 'Hide image' : 'Show image';
+});
 $('run-sector').addEventListener('click', () => runSector());
 $('reset').addEventListener('click', () => {
   stopAll();
@@ -485,7 +490,7 @@ function onWorkerMsg(ev: MessageEvent<HorseshoeWorkerToMain>): void {
   const m = ev.data;
   switch (m.type) {
     case 'gridRow':
-      canvas.setGridRow(m.msg.row, m.msg.tauStars);
+      canvas.setGridRow(m.msg.row, m.msg.tauStars, m.msg.vStars);
       break;
     case 'gridProgress':
       $('status').textContent = `grid… ${m.done} / ${m.total}`;

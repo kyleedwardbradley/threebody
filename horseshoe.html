@@ -47,7 +47,10 @@
         <div class="buttons">
           <button id="run-grid">Compute grid</button>
           <button id="stop-grid">Stop</button>
+        </div>
+        <div class="buttons">
           <button id="toggle-grid">Hide grid</button>
+          <button id="toggle-image">Show image</button>
         </div>
 
         <h2 class="section">Sector</h2>
@@ -91,16 +94,17 @@
         <div id="status">ready</div>
 
         <p class="legend">
-          <span class="sw blue"></span> domain sector (τ₀, v₀)<br />
-          <span class="sw red"></span> image polygon (τ*, |v*|)<br />
-          underlay: τ* by hue (cyclic), escapes transparent
+          Disc: angle = τ (0 at top, clockwise), radius = v.<br />
+          Grid (domain): each cell at (τ₀, v₀); colour = τ*.<br />
+          Image (codomain): each non-escape cell plotted at
+          (τ*, |v*|); colour = τ₀.<br />
+          <span class="sw blue"></span> sector in domain ([τs,τe]×[vs,ve])<br />
+          <span class="sw red"></span> sector's image P(sector)
         </p>
         <p class="note">
-          Grid scan: for each (τ₀, v₀) cell, shoot to first z=0 crossing
-          and colour by τ*. Sector image: trace the 4 edges of the
-          rectangle [τs,τe]×[vs,ve] under the Poincaré map and shade the
-          enclosed region. Where the red image overlaps the blue sector,
-          you have a Smale-horseshoe candidate.
+          Escape cells are transparent. Where the red image polygon overlaps
+          the blue sector you have a Smale-horseshoe candidate. Toggle the
+          grid and image overlays with the buttons above.
         </p>
       </aside>
 

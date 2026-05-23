@@ -32,12 +32,14 @@ export class HorseshoeCanvas {
 
   private n = 0;
   private vMax = 1;
-  // tauStars[j * n + i] = τ* at (i,j) cell, NaN = escape.
+  // tauStars[j*n+i] = τ* at (i,j) cell; vStars[j*n+i] = |v*|. NaN = escape.
   private tauStars: Float32Array | null = null;
+  private vStars: Float32Array | null = null;
 
   private sector: SectorRect | null = null;
   private polygon: PolygonPoint[] | null = null;
   private showGrid = true;
+  private showImage = false;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -57,21 +59,27 @@ export class HorseshoeCanvas {
     this.n = n;
     this.vMax = vMax;
     this.tauStars = new Float32Array(n * n);
+    this.vStars = new Float32Array(n * n);
     this.tauStars.fill(Number.NaN);
+    this.vStars.fill(Number.NaN);
     this.offValid = false;
     this.draw();
   }
 
-  setGridRow(j: number, tauStars: Float32Array): void {
-    if (!this.tauStars || j < 0 || j >= this.n) return;
+  setGridRow(j: number, tauStars: Float32Array, vStars: Float32Array): void {
+    if (!this.tauStars || !this.vStars || j < 0 || j >= this.n) return;
     const off = j * this.n;
-    for (let i = 0; i < this.n; i++) this.tauStars[off + i] = tauStars[i];
+    for (let i = 0; i < this.n; i++) {
+      this.tauStars[off + i] = tauStars[i];
+      this.vStars[off + i] = vStars[i];
+    }
     this.offValid = false;
     this.draw();
   }
 
   clearGrid(): void {
     this.tauStars = null;
+    this.vStars = null;
     this.offValid = false;
     this.draw();
   }
@@ -87,6 +95,8 @@ export class HorseshoeCanvas {
   }
   setShowGrid(on: boolean): void { this.showGrid = on; this.draw(); }
   getShowGrid(): boolean { return this.showGrid; }
+  setShowImage(on: boolean): void { this.showImage = on; this.draw(); }
+  getShowImage(): boolean { return this.showImage; }
 
   // Geometry for screen-space gap measurement in the refinement loop.
   getDiscGeometry(): { cx: number; cy: number; R: number; vMax: number } {
@@ -123,6 +133,45 @@ export class HorseshoeCanvas {
   }
 
   // ----- rasterise the heatmap -----
+
+  private drawColorBar(ctx: CanvasRenderingContext2D, w: number, _h: number): void {
+    const barW = 150;
+    const barH = 10;
+    const x = w - barW - 16;
+    const y = 30;
+    // Header label
+    ctx.fillStyle = '#8a8fa5';
+    ctx.font = '11px -apple-system, system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText('cyclic τ  (0 = mutual apogee)', x, y - 6);
+    // Gradient strip
+    for (let px = 0; px < barW; px++) {
+      const t = px / (barW - 1);
+      const [r, g, b] = cyclicColor(t);
+      ctx.fillStyle = `rgb(${r},${g},${b})`;
+      ctx.fillRect(x + px, y, 1, barH);
+    }
+    // Border
+    ctx.strokeStyle = '#3a3a48';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, y + 0.5, barW - 1, barH - 1);
+    // Tick marks + labels
+    ctx.fillStyle = '#8a8fa5';
+    ctx.strokeStyle = '#8a8fa5';
+    ctx.font = '9px -apple-system, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    const ticks = [0, 0.25, 0.5, 0.75, 1.0];
+    for (const t of ticks) {
+      const tx = x + t * (barW - 1);
+      ctx.beginPath();
+      ctx.moveTo(tx, y + barH);
+      ctx.lineTo(tx, y + barH + 3);
+      ctx.stroke();
+      ctx.fillText(t.toFixed(2), tx, y + barH + 4);
+    }
+  }
 
   private rasterise(): void {
     const ctx = this.offCtx;
@@ -188,6 +237,34 @@ export class HorseshoeCanvas {
       ctx.drawImage(this.off, 0, 0, w, h);
     }
 
+    // Image-dot overlay: for each non-escape grid cell, plot at (τ*, |v*|)
+    // coloured by τ₀ (the input phase). Same cyclic colourmap as the grid,
+    // applied to the input rather than the output.
+    if (this.showImage && this.tauStars && this.vStars && this.n > 0) {
+      const n = this.n;
+      for (let j = 0; j < n; j++) {
+        const v0 = ((j + 0.5) / n) * this.vMax;     // not needed for plot, but
+        void v0;                                    //   keeps intent explicit
+        for (let i = 0; i < n; i++) {
+          const ts = this.tauStars[j * n + i];
+          if (isNaN(ts)) continue;
+          const vs = this.vStars[j * n + i];
+          if (isNaN(vs)) continue;
+          const rad = (vs / this.vMax) * R;
+          if (rad < 0 || rad > R) continue;
+          const ang = angleForTau(ts);
+          const x = cx + rad * Math.cos(ang);
+          const y = cy + rad * Math.sin(ang);
+          const tau0 = (i + 0.5) / n;
+          const [r0, g0, b0] = cyclicColor(tau0);
+          ctx.fillStyle = `rgba(${r0},${g0},${b0},0.55)`;
+          ctx.beginPath();
+          ctx.arc(x, y, 1.4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+
     // Polar grid: rings + month spokes.
     ctx.strokeStyle = '#1e2638';
     ctx.lineWidth = 1;
@@ -244,6 +321,23 @@ export class HorseshoeCanvas {
       ctx.fill();
       ctx.stroke();
     }
+
+    // Title in the top centre showing what the plot is.
+    {
+      const lines: string[] = [];
+      if (this.showGrid && this.tauStars) lines.push('grid: (τ₀, v₀)  colour = τ*');
+      if (this.showImage && this.tauStars) lines.push('image: (τ*, |v*|)  colour = τ₀');
+      ctx.fillStyle = '#8a8fa5';
+      ctx.font = '11px -apple-system, system-ui, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      for (let i = 0; i < lines.length; i++) {
+        ctx.fillText(lines[i], 10, 8 + i * 14);
+      }
+    }
+
+    // Cyclic colour-bar legend (top right) when grid is visible.
+    if (this.showGrid && this.tauStars) this.drawColorBar(ctx, w, h);
 
     // Image polygon (red translucent closed curve).
     if (this.polygon && this.polygon.length > 2) {
