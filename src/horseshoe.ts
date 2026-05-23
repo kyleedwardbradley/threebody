@@ -65,9 +65,21 @@ interface PendingGap {
 const polygonNodes: PolygonNode[] = [];   // sorted by s in [0, 4)
 const heap: Gap[] = [];                   // max-heap on dist
 let pending: PendingGap[] = [];
-const REFINE_BATCH = 32;
+// Refine one gap per round-trip so we strictly process the longest
+// remaining segment first (no batch can outrun a sub-gap created mid-batch).
+const REFINE_BATCH = 1;
 const THRESHOLD_PX = 1;
 let refineCap = 50_000;
+let lastRedrawAt = 0;
+const REDRAW_INTERVAL_MS = 30;
+
+function throttledRedraw(): void {
+  const now = performance.now();
+  if (now - lastRedrawAt >= REDRAW_INTERVAL_MS) {
+    redrawPolygon();
+    lastRedrawAt = now;
+  }
+}
 
 // Boundary parameter s ∈ [0, 4):
 //   edge 0 (s∈[0,1)): left spiral  τ=tauS, v: vS → effVE
@@ -541,7 +553,7 @@ function onWorkerMsg(ev: MessageEvent<HorseshoeWorkerToMain>): void {
           }
         }
         pending = [];
-        redrawPolygon();
+        throttledRedraw();
         refineStep();
       }
       break;
