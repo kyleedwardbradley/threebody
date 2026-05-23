@@ -1,0 +1,274 @@
+// Polar canvas for the Horseshoe page.
+//  - Shows a τ₀-by-v₀ grid heatmap of τ* (first-return phase), with
+//    escape cells rendered transparent.
+//  - Overlays a translucent blue "sector" (the chosen rectangle in
+//    domain (τ, v) space).
+//  - Overlays a translucent red "image polygon" (the closed curve in
+//    codomain (τ*, |v*|) space traced by integrating around the sector
+//    boundary).
+//
+// Heatmap pixels are rasterised to an offscreen canvas as grid rows
+// arrive; the main draw composits offscreen + overlays each redraw.
+
+export interface SectorRect {
+  tauS: number; tauE: number; // τ₀ bounds (may wrap mod 1)
+  vS: number; vE: number;     // v₀ bounds (vS < vE)
+}
+
+export interface PolygonPoint {
+  tau: number;        // τ* (cyclic mod 1)
+  v: number;          // |v*|
+  escaped: boolean;
+}
+
+export class HorseshoeCanvas {
+  readonly canvas: HTMLCanvasElement;
+  private readonly ctx: CanvasRenderingContext2D;
+
+  // Offscreen heatmap.
+  private off: HTMLCanvasElement;
+  private offCtx: CanvasRenderingContext2D;
+  private offValid = false;
+
+  private n = 0;
+  private vMax = 1;
+  // tauStars[j * n + i] = τ* at (i,j) cell, NaN = escape.
+  private tauStars: Float32Array | null = null;
+
+  private sector: SectorRect | null = null;
+  private polygon: PolygonPoint[] | null = null;
+
+  constructor(canvas: HTMLCanvasElement) {
+    this.canvas = canvas;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('2D context unavailable');
+    this.ctx = ctx;
+    this.off = document.createElement('canvas');
+    this.offCtx = this.off.getContext('2d')!;
+    this.resize();
+    const ro = new ResizeObserver(() => this.resize());
+    ro.observe(canvas);
+  }
+
+  // ----- grid -----
+
+  beginGrid(n: number, vMax: number): void {
+    this.n = n;
+    this.vMax = vMax;
+    this.tauStars = new Float32Array(n * n);
+    this.tauStars.fill(Number.NaN);
+    this.offValid = false;
+    this.draw();
+  }
+
+  setGridRow(j: number, tauStars: Float32Array): void {
+    if (!this.tauStars || j < 0 || j >= this.n) return;
+    const off = j * this.n;
+    for (let i = 0; i < this.n; i++) this.tauStars[off + i] = tauStars[i];
+    this.offValid = false;
+    this.draw();
+  }
+
+  clearGrid(): void {
+    this.tauStars = null;
+    this.offValid = false;
+    this.draw();
+  }
+
+  // ----- overlays -----
+
+  setSector(s: SectorRect | null): void { this.sector = s; this.draw(); }
+  setPolygon(pts: PolygonPoint[] | null): void { this.polygon = pts; this.draw(); }
+
+  // ----- size -----
+
+  private resize(): void {
+    const dpr = window.devicePixelRatio || 1;
+    const w = this.canvas.clientWidth;
+    const h = this.canvas.clientHeight;
+    if (w === 0 || h === 0) return;
+    this.canvas.width = Math.floor(w * dpr);
+    this.canvas.height = Math.floor(h * dpr);
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    this.off.width = Math.floor(w * dpr);
+    this.off.height = Math.floor(h * dpr);
+    this.offCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.offValid = false;
+    this.draw();
+  }
+
+  // ----- rasterise the heatmap -----
+
+  private rasterise(): void {
+    const ctx = this.offCtx;
+    const w = this.off.clientWidth || this.off.width / (window.devicePixelRatio || 1);
+    const h = this.off.clientHeight || this.off.height / (window.devicePixelRatio || 1);
+    ctx.clearRect(0, 0, w, h);
+
+    if (!this.tauStars || this.n === 0) { this.offValid = true; return; }
+
+    const cx = w / 2, cy = h / 2;
+    const R = Math.max(0, Math.min(w, h) / 2 - 28);
+    if (R <= 0) { this.offValid = true; return; }
+
+    const n = this.n, vMax = this.vMax;
+
+    // Pixel sampling: for each pixel inside the disc, find which (i,j) cell
+    // it belongs to and look up τ*. This is O(pixels) and resolution-independent,
+    // and crucially avoids stroking n² polar wedges (which would be slow for
+    // large n).
+    const imageData = ctx.createImageData(Math.floor(w), Math.floor(h));
+    const data = imageData.data;
+    const wi = Math.floor(w);
+    const hi = Math.floor(h);
+    for (let py = 0; py < hi; py++) {
+      const dy = py - cy;
+      for (let px = 0; px < wi; px++) {
+        const dx = px - cx;
+        const rad = Math.hypot(dx, dy);
+        if (rad > R) continue;
+        // Convert to (τ, v) — angle = atan2(dy, dx) + π/2 to match the
+        // τ=0 at top, clockwise convention used elsewhere.
+        const ang = Math.atan2(dy, dx) + Math.PI / 2;
+        let tau = ang / (2 * Math.PI);
+        tau = tau - Math.floor(tau);
+        const v0 = (rad / R) * vMax;
+        const i = Math.min(n - 1, Math.max(0, Math.floor(tau * n)));
+        const j = Math.min(n - 1, Math.max(0, Math.floor((v0 / vMax) * n)));
+        const ts = this.tauStars[j * n + i];
+        if (isNaN(ts)) continue; // escape → leave transparent
+        const [r, g, b] = cyclicColor(ts);
+        const idx = (py * wi + px) * 4;
+        data[idx] = r;
+        data[idx + 1] = g;
+        data[idx + 2] = b;
+        data[idx + 3] = 230; // mostly opaque, slight transparency for overlay
+      }
+    }
+    // Reset transform to device pixels for putImageData, then restore.
+    const dpr = window.devicePixelRatio || 1;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.putImageData(imageData, 0, 0);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    this.offValid = true;
+  }
+
+  // ----- composite draw -----
+
+  private draw(): void {
+    const ctx = this.ctx;
+    const w = this.canvas.clientWidth;
+    const h = this.canvas.clientHeight;
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#06060e';
+    ctx.fillRect(0, 0, w, h);
+
+    const cx = w / 2, cy = h / 2;
+    const R = Math.max(0, Math.min(w, h) / 2 - 28);
+    if (R <= 0) return;
+
+    if (!this.offValid) this.rasterise();
+
+    // Heatmap underlay.
+    ctx.drawImage(this.off, 0, 0, w, h);
+
+    // Polar grid: rings + month spokes.
+    ctx.strokeStyle = '#1e2638';
+    ctx.lineWidth = 1;
+    ctx.font = '10px -apple-system, system-ui, sans-serif';
+    ctx.fillStyle = '#556';
+    const rings = 4;
+    for (let i = 1; i <= rings; i++) {
+      const r = (R * i) / rings;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.stroke();
+      const val = (this.vMax * i) / rings;
+      ctx.fillText(val.toFixed(2), cx + 3, cy - r - 2);
+    }
+    ctx.strokeStyle = '#1a2030';
+    for (let m = 0; m < 12; m++) {
+      const a = angleForTau(m / 12);
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + R * Math.cos(a), cy + R * Math.sin(a));
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#8a8fa5';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const months = ['J','F','M','A','M','J','J','A','S','O','N','D'];
+    for (let m = 0; m < 12; m++) {
+      const a = angleForTau((m + 0.5) / 12);
+      ctx.fillText(months[m], cx + (R + 14) * Math.cos(a), cy + (R + 14) * Math.sin(a));
+    }
+
+    // Sector (blue translucent annular wedge).
+    if (this.sector) {
+      const s = this.sector;
+      const rIn = Math.max(0, Math.min(R, (s.vS / this.vMax) * R));
+      const rOut = Math.max(0, Math.min(R, (s.vE / this.vMax) * R));
+      const aS = angleForTau(s.tauS);
+      const aE = angleForTau(s.tauE);
+      // Canvas arcs go counter-clockwise when anticlockwise=true; our angle
+      // increases clockwise with τ. Use clockwise=true (default false flipped
+      // because y axis is flipped). The math: angleForTau is monotonic in τ,
+      // so going from aS to aE (with aE > aS in math coords) traces tau
+      // increasing.
+      ctx.fillStyle = 'rgba(80, 140, 255, 0.35)';
+      ctx.strokeStyle = 'rgba(140, 180, 255, 0.9)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      // sweep angle range
+      const fromA = aS;
+      const toA = aE > aS ? aE : aE + 2 * Math.PI;
+      ctx.arc(cx, cy, rOut, fromA, toA, false);
+      ctx.arc(cx, cy, rIn, toA, fromA, true);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    // Image polygon (red translucent closed curve).
+    if (this.polygon && this.polygon.length > 2) {
+      ctx.fillStyle = 'rgba(255, 90, 90, 0.30)';
+      ctx.strokeStyle = 'rgba(255, 130, 130, 0.9)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      let started = false;
+      for (const p of this.polygon) {
+        if (p.escaped || !isFinite(p.tau) || !isFinite(p.v)) {
+          started = false; continue;
+        }
+        const rad = (p.v / this.vMax) * R;
+        if (rad < 0 || rad > R) { started = false; continue; }
+        const a = angleForTau(p.tau);
+        const x = cx + rad * Math.cos(a);
+        const y = cy + rad * Math.sin(a);
+        if (started) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+        started = true;
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+  }
+}
+
+function angleForTau(tau: number): number {
+  return tau * 2 * Math.PI - Math.PI / 2;
+}
+
+// Cyclic colour map for τ ∈ [0, 1) → RGB. Twilight-like (purple → blue →
+// green → yellow → orange → red → purple).
+function cyclicColor(t: number): [number, number, number] {
+  let u = t - Math.floor(t);
+  // Cosine-based cyclic colormap (looks similar to matplotlib twilight).
+  const a = 2 * Math.PI * u;
+  const r = 0.5 + 0.5 * Math.cos(a + 0.0);
+  const g = 0.5 + 0.5 * Math.cos(a + 2.094); // 120°
+  const b = 0.5 + 0.5 * Math.cos(a + 4.189); // 240°
+  return [Math.round(255 * r), Math.round(255 * g), Math.round(255 * b)];
+}

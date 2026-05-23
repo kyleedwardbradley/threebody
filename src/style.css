@@ -94,6 +94,14 @@ html, body {
 .legend .up { background: #66ff99; }
 .legend .dn { background: #ff6a9a; }
 .legend .esc { background: #ff3a6a; }
+.legend .blue { background: rgba(80, 140, 255, 0.7); }
+.legend .red  { background: rgba(255, 90, 90, 0.7); }
+
+#controls h2.section {
+  font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+  margin: 18px 0 8px; opacity: 0.55; font-weight: 600;
+  border-top: 1px solid #22222e; padding-top: 12px;
+}
 
 /* Segmented (radio-like) button group */
 .seg {
@@ -135,9 +143,20 @@ html, body {
   grid-template-columns: 1fr;
   grid-template-rows: 1fr;
 }
-#main.single-pane #polar {
+#main.single-pane #polar,
+#main.single-pane .panel {
   grid-column: 1;
   grid-row: 1;
+}
+#main.single-pane .panel {
+  position: relative;
+  background: #0a0a12;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+#main.single-pane .panel canvas {
+  width: 100%; height: 100%; display: block;
 }
 #main.dual-pane {
   grid-template-columns: 1fr 1fr;

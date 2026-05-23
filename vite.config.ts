@@ -10,8 +10,9 @@ export default defineConfig({
   build: {
     rollupOptions: {
       input: {
-        main:  resolve(__dirname, 'index.html'),
-        sweep: resolve(__dirname, 'sweep.html'),
+        main:      resolve(__dirname, 'index.html'),
+        sweep:     resolve(__dirname, 'sweep.html'),
+        horseshoe: resolve(__dirname, 'horseshoe.html'),
       },
     },
   },

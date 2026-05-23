@@ -79,3 +79,43 @@ export type SweepWorkerToMain =
 //  'v0'    — radius = v₀ (initial vertical velocity)
 //  'vStar' — radius = |v*| (velocity at first return — codomain panel)
 export type RadiusSource = 'v0' | 'vStar';
+
+// ----- Horseshoe page -----
+
+export interface HorseshoeGridRequest {
+  e: number;
+  maxPeriods: number;
+  n: number;           // grid is n × n (n τ₀ values × n v₀ values)
+  vMax: number;        // top of v₀ range; v₀ ∈ (0, vMax]
+}
+
+export interface HorseshoeShootRequest {
+  e: number;
+  maxPeriods: number;
+  tau0s: number[];     // parallel arrays
+  v0s: number[];
+}
+
+export type HorseshoeMainToWorker =
+  | { type: 'gridScan'; req: HorseshoeGridRequest }
+  | { type: 'shoot'; req: HorseshoeShootRequest }
+  | { type: 'stop' };
+
+export interface HorseshoeRowMsg {
+  row: number;                // 0..n-1, the j index over v₀
+  tauStars: Float32Array;     // length n; NaN where escaped
+  vStars: Float32Array;       // length n; NaN where escaped
+}
+
+export interface HorseshoeShootMsg {
+  tauStars: Float32Array;
+  vStars: Float32Array;
+  escapes: Uint8Array;        // 1 = escape, 0 = return
+}
+
+export type HorseshoeWorkerToMain =
+  | { type: 'gridRow'; msg: HorseshoeRowMsg }
+  | { type: 'gridProgress'; done: number; total: number }
+  | { type: 'gridDone' }
+  | { type: 'shotResults'; msg: HorseshoeShootMsg }
+  | { type: 'stopped' };
