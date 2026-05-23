@@ -21,8 +21,8 @@ interface Cfg {
   k: number;
 }
 const cfg: Cfg = {
-  e: 0.5, vMax: 10, maxPeriods: 5, n: 100,
-  tauS: 0.10, tauE: 0.18, vS: 0.30, vE: 0.60, k: 80,
+  e: 0.5, vMax: 3.2, maxPeriods: 5, n: 200,
+  tauS: 0.254, tauE: 0.276, vS: 0.300, vE: 1.848, k: 3800,
 };
 
 let worker: Worker | null = null;
@@ -267,6 +267,7 @@ $('toggle-image').addEventListener('click', () => {
   $('toggle-image').textContent = next ? 'Hide image' : 'Show image';
 });
 $('run-sector').addEventListener('click', () => runSector());
+$('refine-sector').addEventListener('click', () => startRefinement());
 $('reset').addEventListener('click', () => {
   stopAll();
   canvas.clearGrid();
@@ -491,8 +492,30 @@ function consumeEdgeResults(
   }
   polygonNodes.sort((a, b) => a.s - b.s);
   redrawPolygon();
+  phase = 'idle';
+  killWorker();
+  const nEsc = polygonNodes.reduce((s, n) => s + (n.escaped ? 1 : 0), 0);
+  $('status').textContent =
+    `sector image: N=${polygonNodes.length}${nEsc ? `, ${nEsc} escaped` : ''} — click Refine to subdivide`;
+}
+
+function startRefinement(): void {
+  if (phase !== 'idle') return;
+  if (polygonNodes.length < 2) {
+    $('status').textContent = 'no sector image to refine — compute one first';
+    return;
+  }
+  refineCap = Math.min(50_000, Math.max(2000, 50 * polygonNodes.length));
+  ensureWorker();
   phase = 'sector-refining';
   buildInitialHeap();
+  if (heap.length === 0) {
+    phase = 'idle';
+    killWorker();
+    $('status').textContent =
+      `sector image: N=${polygonNodes.length} — all gaps already ≤ ${THRESHOLD_PX} px`;
+    return;
+  }
   refineStep();
 }
 

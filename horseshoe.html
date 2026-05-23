@@ -25,9 +25,9 @@
 
         <div class="control">
           <label><span>v₀ max</span>
-            <input type="text" id="vmax-num" class="num" step="0.01" value="10.000" />
+            <input type="text" id="vmax-num" class="num" step="0.01" value="3.200" />
           </label>
-          <input type="range" id="vmax" min="0.05" max="10" step="0.01" value="10" />
+          <input type="range" id="vmax" min="0.05" max="10" step="0.01" value="3.2" />
         </div>
 
         <div class="control">
@@ -39,9 +39,9 @@
 
         <div class="control">
           <label><span>Grid resolution</span>
-            <input type="text" id="n-num" class="num" min="50" max="1000" step="1" value="100" />
+            <input type="text" id="n-num" class="num" min="50" max="1000" step="1" value="200" />
           </label>
-          <input type="range" id="n" min="50" max="1000" step="1" value="100" />
+          <input type="range" id="n" min="50" max="1000" step="1" value="200" />
         </div>
 
         <div class="buttons">
@@ -57,37 +57,38 @@
 
         <div class="control">
           <label><span>τs</span>
-            <input type="text" id="taus-num" class="num" min="0" max="1" step="0.001" value="0.10" />
+            <input type="text" id="taus-num" class="num" min="0" max="1" step="0.001" value="0.254" />
           </label>
-          <input type="range" id="taus" min="0" max="1" step="0.001" value="0.10" />
+          <input type="range" id="taus" min="0" max="1" step="0.001" value="0.254" />
         </div>
         <div class="control">
           <label><span>τe</span>
-            <input type="text" id="taue-num" class="num" min="0" max="1" step="0.001" value="0.18" />
+            <input type="text" id="taue-num" class="num" min="0" max="1" step="0.001" value="0.276" />
           </label>
-          <input type="range" id="taue" min="0" max="1" step="0.001" value="0.18" />
+          <input type="range" id="taue" min="0" max="1" step="0.001" value="0.276" />
         </div>
         <div class="control">
           <label><span>vs</span>
-            <input type="text" id="vs-num" class="num" step="0.001" value="0.30" />
+            <input type="text" id="vs-num" class="num" step="0.001" value="0.300" />
           </label>
-          <input type="range" id="vs" min="0" max="10" step="0.001" value="0.30" />
+          <input type="range" id="vs" min="0" max="10" step="0.001" value="0.300" />
         </div>
         <div class="control">
           <label><span>ve</span>
-            <input type="text" id="ve-num" class="num" step="0.001" value="0.60" />
+            <input type="text" id="ve-num" class="num" step="0.001" value="1.848" />
           </label>
-          <input type="range" id="ve" min="0" max="10" step="0.001" value="0.60" />
+          <input type="range" id="ve" min="0" max="10" step="0.001" value="1.848" />
         </div>
         <div class="control">
           <label><span>Edge points (K)</span>
-            <input type="text" id="k-num" class="num" min="10" max="5000" step="1" value="80" />
+            <input type="text" id="k-num" class="num" min="10" max="5000" step="1" value="3800" />
           </label>
-          <input type="range" id="k" min="10" max="5000" step="1" value="80" />
+          <input type="range" id="k" min="10" max="5000" step="1" value="3800" />
         </div>
 
         <div class="buttons">
           <button id="run-sector">Compute sector image</button>
+          <button id="refine-sector">Refine</button>
           <button id="reset">Reset</button>
         </div>
 
