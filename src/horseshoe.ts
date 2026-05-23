@@ -245,7 +245,7 @@ bindNumeric('ve', 've-num',
 
 bindNumeric('k', 'k-num',
   { toNum: (v) => Math.round(v).toString(),
-    clamp: (v) => Math.max(4, Math.min(2000, Math.round(v))) },
+    clamp: (v) => Math.max(4, Math.min(5000, Math.round(v))) },
   (v) => { cfg.k = v; });
 
 // ---------- Buttons ----------
