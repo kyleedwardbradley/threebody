@@ -98,18 +98,20 @@
 
         <p class="legend">
           Colour: <span id="color-legend">v₀ (purple → yellow)</span><br />
-          <span class="sw esc"></span> escaped (outer ring)
+          <span class="sw esc"></span> escaped (outer ring on left)
         </p>
         <p class="note">
-          One dot per shot: angle = first-return phase τ*, radius = v₀.
-          Shots that never return within Max time land on the outer ring at
-          their final phase.
+          Left: angle = τ* (first-return phase), radius = v₀. Right:
+          codomain — angle = τ*, radius = |v*| (return velocity).
         </p>
       </aside>
 
-      <main id="main" class="single-pane">
-        <div id="polar">
-          <canvas id="polar-canvas"></canvas>
+      <main id="main" class="dual-pane">
+        <div class="panel">
+          <canvas id="polar-canvas-domain"></canvas>
+        </div>
+        <div class="panel">
+          <canvas id="polar-canvas-codomain"></canvas>
         </div>
       </main>
     </div>

@@ -10,7 +10,46 @@ import type {
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
 
-const polar = new SweepPolar($<HTMLCanvasElement>('polar-canvas'));
+const polarDomain = new SweepPolar($<HTMLCanvasElement>('polar-canvas-domain'));
+const polarCodomain = new SweepPolar($<HTMLCanvasElement>('polar-canvas-codomain'));
+// Left: (τ*, v₀) — angle = return phase, radius = initial velocity.
+polarDomain.setLabel('τ* vs v₀');
+polarDomain.setRadiusSource('v0');
+// Right: (τ*, |v*|) — codomain.
+polarCodomain.setLabel('τ* vs |v*|');
+polarCodomain.setRadiusSource('vStar');
+polarCodomain.setAutoGrow(true);
+
+// Feed both panels from one stream of sweep results.
+function addPoints(items: SweepResult[]): void {
+  polarDomain.add(items);
+  polarCodomain.add(items);
+}
+function clearPoints(): void {
+  polarDomain.clear();
+  polarCodomain.clear();
+}
+// The plot the refinement queue measures gaps on (always the domain panel).
+const polar = polarDomain;
+
+function applyMode(v: SweepPlotMode): void {
+  polarDomain.setMode(v); polarCodomain.setMode(v);
+}
+function applyColor(v: SweepColorMode): void {
+  polarDomain.setColor(v); polarCodomain.setColor(v);
+}
+function applyDotSize(v: number): void {
+  polarDomain.setDotSize(v); polarCodomain.setDotSize(v);
+}
+function applyDomainRange(lo: number, hi: number): void {
+  polarDomain.setRange(lo, hi);
+  // Colour scale follows the v₀ range on both panels.
+  polarDomain.setColorRange(lo, hi);
+  polarCodomain.setColorRange(lo, hi);
+  // Give the codomain panel a starting range; it'll auto-grow if needed.
+  const { vMin: cMin, vMax: cMax } = polarCodomain.getRange();
+  if (cMax <= 0 || cMax < hi) polarCodomain.setRange(0, Math.max(hi, cMax));
+}
 
 let worker: Worker | null = null;
 let running = false;
@@ -64,6 +103,7 @@ let shotsCap = 0;
 let pendingGaps: Gap[] = []; // gaps whose midpoints are in flight; aligned with shotResults order
 const REFINE_BATCH = 32;
 
+// Refinement geometry: the (τ*, v₀) left panel.
 function discRadius(): number { return polar.getDiscRadius(); }
 function discCenter(): { cx: number; cy: number } {
   const c = polar.canvas;
@@ -143,7 +183,7 @@ function refineStep(): void {
 
 function consumeShotResults(items: SweepResult[]): void {
   // Pair results with pendingGaps by index. Add the new point, push the two new sub-gaps.
-  polar.add(items);
+  addPoints(items);
   for (let i = 0; i < items.length && i < pendingGaps.length; i++) {
     const newP = items[i];
     const parent = pendingGaps[i];
@@ -244,11 +284,11 @@ const tau0Setter = bindNumeric('tau0', 'tau0-num',
 
 const v0MinSetter = bindNumeric('v0min', 'v0min-num',
   { toNum: (v) => v.toFixed(3), clamp: (v) => Math.max(1e-4, v) },
-  (v) => { cfg.v0Min = v; polar.setRange(cfg.v0Min, cfg.v0Max); });
+  (v) => { cfg.v0Min = v; applyDomainRange(cfg.v0Min, cfg.v0Max); });
 
 const v0MaxSetter = bindNumeric('v0max', 'v0max-num',
   { toNum: (v) => v.toFixed(3), clamp: (v) => Math.max(1e-4, v) },
-  (v) => { cfg.v0Max = v; polar.setRange(cfg.v0Min, cfg.v0Max); });
+  (v) => { cfg.v0Max = v; applyDomainRange(cfg.v0Min, cfg.v0Max); });
 
 const nSetter = bindNumeric('n', 'n-num',
   { toNum: (v) => Math.round(v).toString(),
@@ -262,7 +302,7 @@ const tmaxSetter = bindNumeric('tmax', 'tmax-num',
 
 bindNumeric('dot', 'dot-num',
   { toNum: (v) => v.toFixed(1), clamp: (v) => Math.max(0.1, Math.min(20, v)) },
-  (v) => { polar.setDotSize(v); });
+  (v) => { applyDotSize(v); });
 
 // Segmented controls
 function bindSeg<T extends string>(
@@ -281,10 +321,10 @@ function bindSeg<T extends string>(
 }
 
 const setSpacing = bindSeg<'linear' | 'log'>('data-spacing', (v) => { cfg.spacing = v; });
-const setMode = bindSeg<SweepPlotMode>('data-mode', (v) => { plotMode = v; polar.setMode(v); });
+const setMode = bindSeg<SweepPlotMode>('data-mode', (v) => { plotMode = v; applyMode(v); });
 const setColor = bindSeg<SweepColorMode>('data-color', (v) => {
   plotColor = v;
-  polar.setColor(v);
+  applyColor(v);
   const leg = document.getElementById('color-legend');
   if (leg) leg.textContent = v === 'time' ? 't* (blue → red)' : 'v₀ (purple → yellow)';
 });
@@ -294,7 +334,7 @@ $('run').addEventListener('click', () => startSweep());
 $('pause').addEventListener('click', () => stopSweep());
 $('reset').addEventListener('click', () => {
   stopSweep();
-  polar.clear();
+  clearPoints();
   $('status').textContent = 'ready';
 });
 
@@ -313,8 +353,9 @@ function startSweep(): void {
     $('status').textContent = 'log spacing requires v₀ min > 0';
     return;
   }
-  polar.clear();
-  polar.setRange(cfg.v0Min, cfg.v0Max);
+  clearPoints();
+  applyDomainRange(cfg.v0Min, cfg.v0Max);
+  polarCodomain.setRange(0, Math.max(0.5, cfg.v0Max));
   heap.length = 0;
   pendingGaps = [];
 
@@ -323,7 +364,7 @@ function startSweep(): void {
     const m = ev.data;
     switch (m.type) {
       case 'result':
-        polar.add(m.items);
+        addPoints(m.items);
         break;
       case 'progress':
         if (phase === 'initial') $('status').textContent = `running… ${m.done} / ${m.total}`;
@@ -419,13 +460,14 @@ $<HTMLInputElement>('tmax-num').value = cfg.maxPeriods.toString();
 
 {
   const dotSlider = $<HTMLInputElement>('dot');
-  polar.setDotSize(parseFloat(dotSlider.value));
+  applyDotSize(parseFloat(dotSlider.value));
 }
 
 setMode(plotMode);
 setColor(plotColor);
 setSpacing(cfg.spacing);
-polar.setRange(cfg.v0Min, cfg.v0Max);
+applyDomainRange(cfg.v0Min, cfg.v0Max);
+polarCodomain.setRange(0, Math.max(0.5, cfg.v0Max));
 
 readQuery();
 updateTabLinks();

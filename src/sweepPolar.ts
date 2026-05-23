@@ -1,4 +1,4 @@
-import type { SweepResult } from './types';
+import type { SweepResult, RadiusSource } from './types';
 
 export type SweepPlotMode = 'scatter' | 'line';
 export type SweepColorMode = 'v0' | 'time';
@@ -15,6 +15,10 @@ export class SweepPolar {
   private color: SweepColorMode = 'v0';
   private timeMaxHint = 100; // max t (sim units) for time-colour gradient; auto-grows
   private dotSize = 1.7;
+  private radiusSource: RadiusSource = 'v0';
+  private autoGrow = false;          // grow vMax to fit incoming data
+  private label: string | null = null;
+  private colorRange: { lo: number; hi: number } | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -33,10 +37,16 @@ export class SweepPolar {
   }
 
   add(items: SweepResult[]): void {
+    let grow = 0;
     for (const p of items) {
       this.insertSorted(p);
       if (!p.escaped && p.t > this.timeMaxHint) this.timeMaxHint = p.t;
+      if (this.autoGrow && !p.escaped) {
+        const r = this.radiusSource === 'v0' ? p.v0 : Math.abs(p.v);
+        if (r > grow) grow = r;
+      }
     }
+    if (this.autoGrow && grow > this.vMax) this.vMax = grow * 1.1;
     this.draw();
   }
 
@@ -80,6 +90,14 @@ export class SweepPolar {
     this.draw();
   }
   getDotSize(): number { return this.dotSize; }
+  setRadiusSource(s: RadiusSource): void { this.radiusSource = s; this.draw(); }
+  setAutoGrow(on: boolean): void { this.autoGrow = on; }
+  setLabel(s: string | null): void { this.label = s; this.draw(); }
+  setColorRange(lo: number, hi: number): void {
+    if (!isFinite(lo) || !isFinite(hi) || hi <= lo) return;
+    this.colorRange = { lo, hi };
+    this.draw();
+  }
 
   getCount(): number { return this.points.length; }
 
@@ -145,14 +163,20 @@ export class SweepPolar {
       ctx.fillText(months[m], cx + (R + 22) * Math.cos(a), cy + (R + 22) * Math.sin(a));
     }
 
-    // Escape ring outline
+    const isV0 = this.radiusSource === 'v0';
+    const radiusOf = (p: SweepResult): number => isV0 ? p.v0 : Math.abs(p.v);
+
+    // Escape ring outline — only meaningful when radius = v₀ (otherwise
+    // escape dots don't get pushed to a separate ring).
     const Resc = R * 1.05;
-    ctx.strokeStyle = '#3a1a2a';
-    ctx.setLineDash([3, 3]);
-    ctx.beginPath();
-    ctx.arc(cx, cy, Resc, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.setLineDash([]);
+    if (isV0) {
+      ctx.strokeStyle = '#3a1a2a';
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.arc(cx, cy, Resc, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
 
     // Line mode: connect non-escape points in v₀ order with a polyline.
     // Skip segments longer than 10% of the diagram width — keeps the regular
@@ -167,7 +191,7 @@ export class SweepPolar {
       let started = false;
       for (const p of this.points) {
         if (p.escaped) { started = false; continue; }
-        const r = ((p.v0 - rMin) / range) * R;
+        const r = ((radiusOf(p) - rMin) / range) * R;
         if (r < 0 || r > R) { started = false; continue; }
         const a = angleForTau(p.tau);
         const x = cx + r * Math.cos(a);
@@ -191,7 +215,9 @@ export class SweepPolar {
     const escDot = Math.max(dot, dot * 1.05);
     for (const p of this.points) {
       if (p.escaped) {
-        // Outer ring at the last-known phase, in a distinct magenta-red.
+        // Domain (radius=v₀): place on outer escape ring at last-known phase.
+        // Codomain (radius=|v*|): τ* isn't meaningful for escapees → skip.
+        if (!isV0) continue;
         const a = angleForTau(p.tau);
         const x = cx + Resc * Math.cos(a);
         const y = cy + Resc * Math.sin(a);
@@ -201,7 +227,7 @@ export class SweepPolar {
         ctx.fill();
         continue;
       }
-      const r = ((p.v0 - rMin) / range) * R;
+      const r = ((radiusOf(p) - rMin) / range) * R;
       if (r < 0 || r > R) continue;
       const a = angleForTau(p.tau);
       const x = cx + r * Math.cos(a);
@@ -210,7 +236,10 @@ export class SweepPolar {
       if (this.color === 'time') {
         ctx.fillStyle = timeColor(p.t, timeMax);
       } else {
-        ctx.fillStyle = v0Color(p.v0, rMin, rMax);
+        // Colour by v₀ over the colour-range so the same dot is the same
+        // hue in both domain and codomain panels.
+        const cr = this.colorRange ?? { lo: rMin, hi: rMax };
+        ctx.fillStyle = v0Color(p.v0, cr.lo, cr.hi);
       }
       ctx.beginPath();
       ctx.arc(x, y, dot, 0, Math.PI * 2);
@@ -223,6 +252,11 @@ export class SweepPolar {
     ctx.fillText(`N = ${this.points.length}`, 10, 8);
     if (this.color === 'time') {
       ctx.fillText(`t ∈ [0, ${timeMax.toFixed(1)}]`, 10, 22);
+    }
+    if (this.label) {
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#8a8fa5';
+      ctx.fillText(this.label, w - 10, 8);
     }
   }
 }

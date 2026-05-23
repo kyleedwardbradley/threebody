@@ -74,3 +74,8 @@ export type SweepWorkerToMain =
   | { type: 'result'; items: SweepResult[] }
   | { type: 'shotResults'; items: SweepResult[] }
   | { type: 'done' };
+
+// Which quantity drives the radial coordinate of a sweep polar plot.
+//  'v0'    — radius = v₀ (initial vertical velocity)
+//  'vStar' — radius = |v*| (velocity at first return — codomain panel)
+export type RadiusSource = 'v0' | 'vStar';
