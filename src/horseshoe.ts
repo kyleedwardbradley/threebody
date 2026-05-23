@@ -209,44 +209,48 @@ function bindNumeric(
 
 // ---------- Bindings ----------
 
+// Physics parameters affect every shot — both grid and polygon go stale.
 bindNumeric('e', 'e-num',
   { toNum: (v) => v.toFixed(3), clamp: (v) => Math.max(0, Math.min(0.999, v)) },
-  (v) => { cfg.e = v; updateTabLinks(); });
-
-bindNumeric('vmax', 'vmax-num',
-  { toNum: (v) => v.toFixed(3), clamp: (v) => Math.max(0.01, v) },
-  (v) => { cfg.vMax = v; canvas.setVMax(v); updateSectorDisplay(); });
+  (v) => { cfg.e = v; updateTabLinks(); invalidateAll(); });
 
 bindNumeric('tmax', 'tmax-num',
   { toNum: (v) => Math.round(v).toString(),
     clamp: (v) => Math.max(1, Math.min(1000, Math.round(v))) },
-  (v) => { cfg.maxPeriods = v; });
+  (v) => { cfg.maxPeriods = v; invalidateAll(); });
 
+// vMax is just a display scale — rescale, never invalidate.
+bindNumeric('vmax', 'vmax-num',
+  { toNum: (v) => v.toFixed(3), clamp: (v) => Math.max(0.01, v) },
+  (v) => { cfg.vMax = v; canvas.setVMax(v); updateSectorDisplay(); });
+
+// Grid resolution only changes the grid scan, not the polygon.
 bindNumeric('n', 'n-num',
   { toNum: (v) => Math.round(v).toString(),
     clamp: (v) => Math.max(50, Math.min(1000, Math.round(v))) },
-  (v) => { cfg.n = v; });
+  (v) => { cfg.n = v; invalidateGrid(); });
 
+// Sector geometry only affects the forward image (polygon).
 bindNumeric('taus', 'taus-num',
   { toNum: (v) => v.toFixed(3), clamp: (v) => ((v % 1) + 1) % 1 },
-  (v) => { cfg.tauS = v; updateSectorDisplay(); });
+  (v) => { cfg.tauS = v; invalidatePolygon(); });
 
 bindNumeric('taue', 'taue-num',
   { toNum: (v) => v.toFixed(3), clamp: (v) => ((v % 1) + 1) % 1 },
-  (v) => { cfg.tauE = v; updateSectorDisplay(); });
+  (v) => { cfg.tauE = v; invalidatePolygon(); });
 
 bindNumeric('vs', 'vs-num',
   { toNum: (v) => v.toFixed(3), clamp: (v) => Math.max(0, v) },
-  (v) => { cfg.vS = v; updateSectorDisplay(); });
+  (v) => { cfg.vS = v; invalidatePolygon(); });
 
 bindNumeric('ve', 've-num',
   { toNum: (v) => v.toFixed(3), clamp: (v) => Math.max(0, v) },
-  (v) => { cfg.vE = v; updateSectorDisplay(); });
+  (v) => { cfg.vE = v; invalidatePolygon(); });
 
 bindNumeric('k', 'k-num',
   { toNum: (v) => Math.round(v).toString(),
     clamp: (v) => Math.max(4, Math.min(5000, Math.round(v))) },
-  (v) => { cfg.k = v; });
+  (v) => { cfg.k = v; invalidatePolygon(); });
 
 // ---------- Buttons ----------
 
@@ -286,6 +290,40 @@ function killWorker(): void {
   if (!worker) return;
   worker.terminate();
   worker = null;
+}
+
+// ---------- Invalidation: keep display in sync with parameters ----------
+
+function invalidatePolygon(): void {
+  const hadPolygon = polygonNodes.length > 0;
+  if (worker && (phase === 'sector-spirals' || phase === 'sector-edges' || phase === 'sector-refining')) {
+    worker.postMessage({ type: 'stop' } as HorseshoeMainToWorker);
+    killWorker();
+    phase = 'idle';
+  }
+  polygonNodes.length = 0;
+  heap.length = 0;
+  pending = [];
+  effVE = 0;
+  canvas.setPolygon(null);
+  updateSectorDisplay();
+  if (hadPolygon) $('status').textContent = 'sector image cleared (parameters changed)';
+}
+
+function invalidateGrid(): void {
+  const hadGrid = canvas.hasGrid();
+  if (worker && phase === 'grid') {
+    worker.postMessage({ type: 'stop' } as HorseshoeMainToWorker);
+    killWorker();
+    phase = 'idle';
+  }
+  canvas.clearGrid();
+  if (hadGrid) $('status').textContent = 'grid cleared (parameters changed)';
+}
+
+function invalidateAll(): void {
+  invalidateGrid();
+  invalidatePolygon();
 }
 
 function stopAll(): void {

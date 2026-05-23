@@ -31,7 +31,12 @@ export class HorseshoeCanvas {
   private offValid = false;
 
   private n = 0;
+  // vMax is the display-time radial scale. scanVMax is the vMax at which
+  // the stored grid was scanned — fixed at beginGrid, never changes if the
+  // user later adjusts the display vMax slider. The two are kept separate
+  // so the heatmap data stays anchored to its real v values.
   private vMax = 1;
+  private scanVMax = 1;
   // tauStars[j*n+i] = τ* at (i,j) cell; vStars[j*n+i] = |v*|. NaN = escape.
   private tauStars: Float32Array | null = null;
   private vStars: Float32Array | null = null;
@@ -58,6 +63,7 @@ export class HorseshoeCanvas {
   beginGrid(n: number, vMax: number): void {
     this.n = n;
     this.vMax = vMax;
+    this.scanVMax = vMax;
     this.tauStars = new Float32Array(n * n);
     this.vStars = new Float32Array(n * n);
     this.tauStars.fill(Number.NaN);
@@ -95,6 +101,7 @@ export class HorseshoeCanvas {
   }
   setShowGrid(on: boolean): void { this.showGrid = on; this.draw(); }
   getShowGrid(): boolean { return this.showGrid; }
+  hasGrid(): boolean { return this.tauStars !== null; }
   setShowImage(on: boolean): void { this.showImage = on; this.draw(); }
   getShowImage(): boolean { return this.showImage; }
 
@@ -185,10 +192,15 @@ export class HorseshoeCanvas {
     const R = Math.max(0, Math.min(wi, hi) / 2 - 28);
     if (R <= 0) { this.offValid = true; return; }
 
-    const n = this.n, vMax = this.vMax;
+    const n = this.n;
+    const displayVMax = this.vMax;
+    const scanVMax = this.scanVMax;
 
     // Pixel sampling: for each pixel inside the disc, find which (i,j) cell
-    // it belongs to and look up τ*. Resolution-independent (single pass).
+    // it belongs to. Cells live at scan-time v values in [0, scanVMax].
+    // The display polar disc spans v ∈ [0, displayVMax]. A pixel at radius r
+    // represents v = (r/R) * displayVMax — if that exceeds scanVMax, no scan
+    // cell covers it (leave transparent).
     const imageData = ctx.createImageData(wi, hi);
     const data = imageData.data;
     for (let py = 0; py < hi; py++) {
@@ -197,15 +209,16 @@ export class HorseshoeCanvas {
         const dx = px - cx;
         const rad = Math.hypot(dx, dy);
         if (rad > R) continue;
+        const vDisplay = (rad / R) * displayVMax;
+        if (vDisplay > scanVMax) continue;
         // angle = atan2(dy, dx) + π/2 matches τ=0 at top, clockwise.
         const ang = Math.atan2(dy, dx) + Math.PI / 2;
         let tau = ang / (2 * Math.PI);
         tau = tau - Math.floor(tau);
-        const v0 = (rad / R) * vMax;
         const i = Math.min(n - 1, Math.max(0, Math.floor(tau * n)));
-        const j = Math.min(n - 1, Math.max(0, Math.floor((v0 / vMax) * n)));
+        const j = Math.min(n - 1, Math.max(0, Math.floor((vDisplay / scanVMax) * n)));
         const ts = this.tauStars[j * n + i];
-        if (isNaN(ts)) continue; // escape → leave transparent
+        if (isNaN(ts)) continue;
         const [r, g, b] = cyclicColor(ts);
         const idx = (py * wi + px) * 4;
         data[idx] = r;
@@ -243,8 +256,6 @@ export class HorseshoeCanvas {
     if (this.showImage && this.tauStars && this.vStars && this.n > 0) {
       const n = this.n;
       for (let j = 0; j < n; j++) {
-        const v0 = ((j + 0.5) / n) * this.vMax;     // not needed for plot, but
-        void v0;                                    //   keeps intent explicit
         for (let i = 0; i < n; i++) {
           const ts = this.tauStars[j * n + i];
           if (isNaN(ts)) continue;
