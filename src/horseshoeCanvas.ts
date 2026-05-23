@@ -37,6 +37,7 @@ export class HorseshoeCanvas {
 
   private sector: SectorRect | null = null;
   private polygon: PolygonPoint[] | null = null;
+  private showGrid = true;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -84,6 +85,8 @@ export class HorseshoeCanvas {
     this.vMax = v;
     this.draw();
   }
+  setShowGrid(on: boolean): void { this.showGrid = on; this.draw(); }
+  getShowGrid(): boolean { return this.showGrid; }
 
   // Geometry for screen-space gap measurement in the refinement loop.
   getDiscGeometry(): { cx: number; cy: number; R: number; vMax: number } {
@@ -180,10 +183,10 @@ export class HorseshoeCanvas {
     const R = Math.max(0, Math.min(w, h) / 2 - 28);
     if (R <= 0) return;
 
-    if (!this.offValid) this.rasterise();
-
-    // Heatmap underlay.
-    ctx.drawImage(this.off, 0, 0, w, h);
+    if (this.showGrid) {
+      if (!this.offValid) this.rasterise();
+      ctx.drawImage(this.off, 0, 0, w, h);
+    }
 
     // Polar grid: rings + month spokes.
     ctx.strokeStyle = '#1e2638';

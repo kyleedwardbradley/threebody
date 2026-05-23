@@ -225,6 +225,11 @@ bindNumeric('k', 'k-num',
 
 $('run-grid').addEventListener('click', () => runGrid());
 $('stop-grid').addEventListener('click', () => stopAll());
+$('toggle-grid').addEventListener('click', () => {
+  const next = !canvas.getShowGrid();
+  canvas.setShowGrid(next);
+  $('toggle-grid').textContent = next ? 'Hide grid' : 'Show grid';
+});
 $('run-sector').addEventListener('click', () => runSector());
 $('reset').addEventListener('click', () => {
   stopAll();
