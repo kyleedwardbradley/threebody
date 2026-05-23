@@ -87,13 +87,17 @@ export class HorseshoeCanvas {
     const w = this.canvas.clientWidth;
     const h = this.canvas.clientHeight;
     if (w === 0 || h === 0) return;
+    // Main canvas: dpr-scaled buffer, CSS-pixel drawing coords.
     this.canvas.width = Math.floor(w * dpr);
     this.canvas.height = Math.floor(h * dpr);
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    this.off.width = Math.floor(w * dpr);
-    this.off.height = Math.floor(h * dpr);
-    this.offCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // Offscreen heatmap: CSS-pixel sized + identity transform. ImageData
+    // operations bypass canvas transforms, so keeping this 1:1 with CSS
+    // pixels avoids the "stamp in upper-left quadrant" trap on retina.
+    this.off.width = Math.floor(w);
+    this.off.height = Math.floor(h);
+    this.offCtx.setTransform(1, 0, 0, 1, 0, 0);
     this.offValid = false;
     this.draw();
   }
@@ -102,34 +106,29 @@ export class HorseshoeCanvas {
 
   private rasterise(): void {
     const ctx = this.offCtx;
-    const w = this.off.clientWidth || this.off.width / (window.devicePixelRatio || 1);
-    const h = this.off.clientHeight || this.off.height / (window.devicePixelRatio || 1);
-    ctx.clearRect(0, 0, w, h);
+    const wi = this.off.width;
+    const hi = this.off.height;
+    ctx.clearRect(0, 0, wi, hi);
 
     if (!this.tauStars || this.n === 0) { this.offValid = true; return; }
 
-    const cx = w / 2, cy = h / 2;
-    const R = Math.max(0, Math.min(w, h) / 2 - 28);
+    const cx = wi / 2, cy = hi / 2;
+    const R = Math.max(0, Math.min(wi, hi) / 2 - 28);
     if (R <= 0) { this.offValid = true; return; }
 
     const n = this.n, vMax = this.vMax;
 
     // Pixel sampling: for each pixel inside the disc, find which (i,j) cell
-    // it belongs to and look up τ*. This is O(pixels) and resolution-independent,
-    // and crucially avoids stroking n² polar wedges (which would be slow for
-    // large n).
-    const imageData = ctx.createImageData(Math.floor(w), Math.floor(h));
+    // it belongs to and look up τ*. Resolution-independent (single pass).
+    const imageData = ctx.createImageData(wi, hi);
     const data = imageData.data;
-    const wi = Math.floor(w);
-    const hi = Math.floor(h);
     for (let py = 0; py < hi; py++) {
       const dy = py - cy;
       for (let px = 0; px < wi; px++) {
         const dx = px - cx;
         const rad = Math.hypot(dx, dy);
         if (rad > R) continue;
-        // Convert to (τ, v) — angle = atan2(dy, dx) + π/2 to match the
-        // τ=0 at top, clockwise convention used elsewhere.
+        // angle = atan2(dy, dx) + π/2 matches τ=0 at top, clockwise.
         const ang = Math.atan2(dy, dx) + Math.PI / 2;
         let tau = ang / (2 * Math.PI);
         tau = tau - Math.floor(tau);
@@ -143,15 +142,10 @@ export class HorseshoeCanvas {
         data[idx] = r;
         data[idx + 1] = g;
         data[idx + 2] = b;
-        data[idx + 3] = 230; // mostly opaque, slight transparency for overlay
+        data[idx + 3] = 230;
       }
     }
-    // Reset transform to device pixels for putImageData, then restore.
-    const dpr = window.devicePixelRatio || 1;
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.putImageData(imageData, 0, 0);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
     this.offValid = true;
   }
 
