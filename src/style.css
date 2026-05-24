@@ -161,7 +161,8 @@ html, body {
 /* Horseshoe in-canvas toolbar */
 .hs-toolbar {
   position: absolute;
-  top: 8px; left: 8px;
+  top: 8px; left: 50%;
+  transform: translateX(-50%);
   z-index: 5;
   display: flex; gap: 4px;
 }
