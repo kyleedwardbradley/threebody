@@ -132,10 +132,12 @@ html, body {
 }
 .tab-bar .theme-toggle:hover { background: var(--bg-button-hover); }
 
-/* Per-panel PDF export button — floats in the top-right of each panel */
+/* Per-panel PDF export button — floats in the bottom-right of each panel
+   so it doesn't collide with the colour bar / status text rendered in
+   the top of the canvas. */
 .panel-export-pdf {
   position: absolute;
-  top: 8px; right: 8px;
+  bottom: 8px; right: 8px;
   z-index: 6;
   background: var(--bg-button);
   color: var(--text-primary);
@@ -339,7 +341,7 @@ html, body {
 #view3d canvas { display: block; }
 .polar-controls {
   position: absolute;
-  top: 8px; right: 72px;     /* room for .panel-export-pdf at right: 8px */
+  top: 8px; right: 10px;
   z-index: 2;
   display: flex; align-items: center; gap: 6px;
   font-size: 11px; color: var(--text-muted);
@@ -349,7 +351,7 @@ html, body {
 .polar-controls .num { width: 56px; }
 .tplot-controls {
   position: absolute;
-  top: 8px; right: 72px;
+  top: 8px; right: 10px;
   z-index: 2;
   display: flex; align-items: center; gap: 6px;
   font-size: 11px; color: var(--text-muted);
