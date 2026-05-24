@@ -67,6 +67,10 @@ export class HorseshoeCanvas {
   // the reflection (τ, v) → (-τ mod 1, v) per Moser's Lemma 2.
   private boundaryD0: { tau: number; v: number }[] | null = null;
   private showBoundaries = true;
+  // V_k = φ⁻¹(R) ∩ R. By Moser's Lemma 2, when R is centred on a
+  // symmetry line, V_k = ρ(U_k) — the reflection of the polygon (U_k =
+  // φ(R) ∩ R) across τ=0. Toggled with showVk.
+  private showVk = false;
   private showGrid = true;
   private showImage = false;
 
@@ -235,6 +239,8 @@ export class HorseshoeCanvas {
   }
   setShowBoundaries(on: boolean): void { this.showBoundaries = on; this.draw(); }
   getShowBoundaries(): boolean { return this.showBoundaries; }
+  setShowVk(on: boolean): void { this.showVk = on; this.draw(); }
+  getShowVk(): boolean { return this.showVk; }
   setVMax(v: number): void {
     if (!isFinite(v) || v <= 0) return;
     this.vMax = v;
@@ -609,6 +615,33 @@ export class HorseshoeCanvas {
         const rad = radiusOf(p.v);
         if (rad < 0 || rad > R) { started = false; continue; }
         const a = angleOf(unwrap(p.tau));
+        const x = cx + rad * Math.cos(a);
+        const y = cy + rad * Math.sin(a);
+        if (started) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+        started = true;
+      }
+      ctx.closePath();
+      ctx.fill('evenodd');
+      ctx.stroke();
+    }
+
+    // V_k = ρ(U_k): reflection of the polygon (U_k) across τ=0. Drawn in
+    // cyan so it's visible alongside the red polygon (U_k). Where the
+    // cyan and the blue sector overlap, you have V_k ∩ R.
+    if (this.polygon && this.showVk && this.polygon.length > 2) {
+      ctx.fillStyle = 'rgba(95, 200, 220, 0.22)';
+      ctx.strokeStyle = 'rgba(140, 220, 235, 0.95)';
+      ctx.lineWidth = lw(1.2);
+      ctx.beginPath();
+      let started = false;
+      for (const p of this.polygon) {
+        if (p.escaped || !isFinite(p.tau) || !isFinite(p.v)) {
+          started = false; continue;
+        }
+        if (!vIn(p.v)) { started = false; continue; }
+        const rad = radiusOf(p.v);
+        if (rad < 0 || rad > R) { started = false; continue; }
+        const a = angleOf(unwrap(-p.tau));
         const x = cx + rad * Math.cos(a);
         const y = cy + rad * Math.sin(a);
         if (started) ctx.lineTo(x, y); else ctx.moveTo(x, y);

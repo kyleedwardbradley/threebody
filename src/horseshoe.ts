@@ -360,6 +360,11 @@ $('toggle-boundaries').addEventListener('click', () => {
   canvas.setShowBoundaries(next);
   $('toggle-boundaries').textContent = next ? 'Hide boundaries' : 'Show boundaries';
 });
+$('toggle-vk').addEventListener('click', () => {
+  const next = !canvas.getShowVk();
+  canvas.setShowVk(next);
+  $('toggle-vk').textContent = next ? 'Hide V_k' : 'Show V_k';
+});
 
 // ---------- Zoom tool + view history (left panel only) ----------
 
