@@ -141,7 +141,7 @@ const heap: Gap[] = [];                   // max-heap on dist
 let pending: PendingGap[] = [];
 // Refine one gap per round-trip so we strictly process the longest
 // remaining segment first (no batch can outrun a sub-gap created mid-batch).
-const REFINE_BATCH = 1;
+const REFINE_BATCH = 64;
 const THRESHOLD_PX = 1;
 let refineCap = 50_000;
 let lastRedrawAt = 0;
@@ -591,52 +591,7 @@ function consumeSpiralResults(
       'sector image: every spiral sample escaped — lower vS, narrow τ range, or pick a smaller sector';
     return;
   }
-  const escCount = escIdx; // 0..escCount-1 are non-escape samples
-  // Chaos-trim: shoots near the escape boundary are hypersensitive — adjacent
-  // v0 samples can map to wildly different (τ*, v*), making the spiral jump
-  // around in screen space. Refinement can't smooth chaos (every midpoint
-  // shoot is random), so we trim both spirals back to where samples are still
-  // continuous.
-  //
-  // Detection has to be RELATIVE because the spiral's segment lengths grow
-  // smoothly as the curve winds outward (outer windings cover more disc per
-  // unit v0). An absolute pixel threshold would cut off the outer windings
-  // even though they're smooth. Instead: walk each spiral forward; declare
-  // chaos at the first k where this segment is much larger than the rolling
-  // median of recent segments. That catches sudden jumps from a smooth
-  // baseline regardless of how that baseline is growing.
-  const WINDOW = 32;
-  const JUMP_FACTOR = 8;
-  const MIN_JUMP_PX = 3;
-  const stableCount = (offset: number): number => {
-    if (escCount < 2) return escCount;
-    const dists: number[] = new Array(escCount - 1);
-    let prev = screenXY(tauStars[offset], vStars[offset]);
-    for (let k = 1; k < escCount; k++) {
-      const cur = screenXY(tauStars[offset + k], vStars[offset + k]);
-      dists[k - 1] = Math.hypot(cur.x - prev.x, cur.y - prev.y);
-      prev = cur;
-    }
-    // Rolling median over the last WINDOW segments.
-    for (let k = 1; k < dists.length; k++) {
-      const lo = Math.max(0, k - WINDOW);
-      const recent = dists.slice(lo, k).sort((a, b) => a - b);
-      const med = recent[Math.floor(recent.length / 2)] ?? 0;
-      const threshold = Math.max(JUMP_FACTOR * med, MIN_JUMP_PX);
-      if (dists[k] > threshold) return k + 1; // keep [0, k+1) i.e. through index k? actually we want to stop BEFORE the bad sample
-    }
-    return escCount;
-  };
-  const leftStable = stableCount(0);
-  const rightStable = stableCount(K);
-  const validCount = Math.min(leftStable, rightStable);
-  if (validCount === 0) {
-    phase = 'idle';
-    killWorker();
-    $('status').textContent =
-      'sector image: spirals chaotic from the start — narrow τ range or lower vS';
-    return;
-  }
+  const validCount = escIdx; // keep ALL non-escape samples; never truncate
   effVE = (K === 1)
     ? cfg.vS
     : cfg.vS + (cfg.vE - cfg.vS) * (validCount - 1) / (K - 1);
@@ -741,6 +696,26 @@ function consumeEdgeResults(
     `sector image: N=${polygonNodes.length}${nEsc ? `, ${nEsc} escaped` : ''} — click Refine to subdivide`;
 }
 
+// ---------- Refinement: pure adaptive bisection by screen-segment length ----
+//
+// Each polygon segment (chord between two consecutive nodes in s-order) is
+// kept in a max-heap keyed on its screen length in pixels. Each step pops
+// the longest segment, shoots the parametric midpoint sMid = (sA + sB)/2
+// through the Poincaré map, inserts the resulting (τ*, v*) point into the
+// polygon at s = sMid, and pushes the two sub-gaps if they're still above
+// THRESHOLD_PX. Done when the heap is empty (all gaps below threshold) or
+// the polygon hits refineCap.
+//
+// There is NO chaos filter, NO dot-product check, NO perimeter check.
+// A midpoint of s always maps to the curve's image at that s; if the chord
+// from A to B happens to skip windings, the inserted midpoint sits on the
+// curve between them in parametric s, even if it's not between them on the
+// screen. That's the true shape of the polygon's image — preserving it is
+// the point of the visualization.
+//
+// The only thing we drop is escape: if a midpoint shoot escapes there's no
+// (τ*, v*) to insert, so that single gap can't be subdivided further.
+
 function startRefinement(): void {
   if (phase !== 'idle') return;
   if (polygonNodes.length < 2) {
@@ -771,6 +746,8 @@ function refineStep(): void {
   const tau0s: number[] = [];
   const v0s: number[] = [];
   const remaining = refineCap - polygonNodes.length;
+  // Batch many shoots per round-trip. The popped top-of-heap entries are
+  // independent (each is its own segment), so they can be shot in parallel.
   const batchTarget = Math.min(REFINE_BATCH, remaining);
   while (pending.length < batchTarget) {
     const g = hPop();
@@ -783,17 +760,52 @@ function refineStep(): void {
     v0s.push(v0);
   }
   if (pending.length === 0) { refineDone('threshold'); return; }
-  const m: HorseshoeMainToWorker = {
+  worker.postMessage({
     type: 'shoot',
     req: { e: cfg.e, maxPeriods: cfg.maxPeriods, tau0s, v0s },
-  };
-  worker.postMessage(m);
+  });
   $('status').textContent =
     `refining sector image… N=${polygonNodes.length}  heap=${heap.length}  longest=${top.dist.toFixed(1)}px`;
 }
 
+function consumeRefineResults(
+  tauStars: Float32Array, vStars: Float32Array, escapes: Uint8Array,
+): void {
+  for (let i = 0; i < pending.length; i++) {
+    const p = pending[i];
+    if (escapes[i] === 1) continue; // can't insert escape; the chord stays as-is
+    const tau = tauStars[i], v = vStars[i];
+    const mid = screenXY(tau, v);
+    const sActual = ((p.sMid % 4) + 4) % 4;
+    insertSorted({
+      s: sActual, tau0: p.tau0, v0: p.v0,
+      tau, v, escaped: false,
+    });
+    const distA = Math.hypot(mid.x - p.gap.ax, mid.y - p.gap.ay);
+    const distB = Math.hypot(p.gap.bx - mid.x, p.gap.by - mid.y);
+    if (distA > THRESHOLD_PX) {
+      hPush({
+        sA: p.gap.sA, sB: p.sMid,
+        ax: p.gap.ax, ay: p.gap.ay, bx: mid.x, by: mid.y,
+        dist: distA,
+      });
+    }
+    if (distB > THRESHOLD_PX) {
+      hPush({
+        sA: p.sMid, sB: p.gap.sB,
+        ax: mid.x, ay: mid.y, bx: p.gap.bx, by: p.gap.by,
+        dist: distB,
+      });
+    }
+  }
+  pending = [];
+  throttledRedraw();
+  refineStep();
+}
+
 function refineDone(reason: 'threshold' | 'cap' | 'stopped'): void {
   phase = 'idle';
+  pending = [];
   redrawPolygon();
   killWorker();
   const tag = reason === 'cap' ? ` (hit ${refineCap}-pt cap)` :
@@ -979,59 +991,7 @@ function onWorkerMsg(ev: MessageEvent<HorseshoeWorkerToMain>): void {
       } else if (phase === 'sector-edges') {
         consumeEdgeResults(tauStars, vStars, escapes);
       } else if (phase === 'sector-refining') {
-        // Two checks gate midpoint insertion:
-        //   - PERIMETER ratio (distA + distB) / parent > 2.0 means the
-        //     midpoint is so far off the chord that the inserted polygon
-        //     would have to take a detour twice the chord's length. That's
-        //     a chaos outlier, not a smooth arc sample. Skip it.
-        //   - Per-sub-gap ratio (sub < CHAOS_RATIO × parent) on push: only
-        //     re-queue sub-gaps that meaningfully shrunk. Sub-gaps near
-        //     the parent's size signal chaos that won't converge.
-        const OFF_SEGMENT_RATIO = 2.0;
-        const CHAOS_RATIO = 0.95;
-        for (let i = 0; i < pending.length; i++) {
-          const p = pending[i];
-          const tau = tauStars[i];
-          const v = vStars[i];
-          const esc = escapes[i] === 1;
-          if (esc) continue;
-          const mid = screenXY(tau, v);
-          const parentDist = p.gap.dist;
-          const dxA = mid.x - p.gap.ax, dyA = mid.y - p.gap.ay;
-          const distA = Math.hypot(dxA, dyA);
-          const dxB = p.gap.bx - mid.x, dyB = p.gap.by - mid.y;
-          const distB = Math.hypot(dxB, dyB);
-          // Perimeter check is the only outlier guard: if the midpoint shoot
-          // returns a point so far off the chord that (|A→mid| + |mid→B|)
-          // doubles the chord length, it's chaos — skip it. No dot-product
-          // check: in tight-winding regions the midpoint of v0 doesn't equal
-          // the geometric midpoint of the screen arc, so legitimate samples
-          // can have dxA·dxB ≤ 0 even when they're real points on the curve.
-          if (distA + distB > OFF_SEGMENT_RATIO * parentDist) continue;
-          const sActual = ((p.sMid % 4) + 4) % 4;
-          const node: PolygonNode = {
-            s: sActual, tau0: p.tau0, v0: p.v0,
-            tau, v, escaped: false,
-          };
-          insertSorted(node);
-          if (distA > THRESHOLD_PX && distA < CHAOS_RATIO * parentDist) {
-            hPush({
-              sA: p.gap.sA, sB: p.sMid,
-              ax: p.gap.ax, ay: p.gap.ay, bx: mid.x, by: mid.y,
-              dist: distA,
-            });
-          }
-          if (distB > THRESHOLD_PX && distB < CHAOS_RATIO * parentDist) {
-            hPush({
-              sA: p.sMid, sB: p.gap.sB,
-              ax: mid.x, ay: mid.y, bx: p.gap.bx, by: p.gap.by,
-              dist: distB,
-            });
-          }
-        }
-        pending = [];
-        throttledRedraw();
-        refineStep();
+        consumeRefineResults(tauStars, vStars, escapes);
       }
       break;
     }
