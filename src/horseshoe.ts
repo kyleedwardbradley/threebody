@@ -77,7 +77,7 @@ interface Cfg {
 }
 const cfg: Cfg = {
   e: 0.5, vMax: 3.2, maxPeriods: 5, n: 200,
-  tauC: 0.265, tauD: 0.011, vS: 0.300, vE: 1.848, k: 3800,
+  tauC: 0.000, tauD: 0.011, vS: 0.300, vE: 1.848, k: 3800,
 };
 function tauStart(): number { return cfg.tauC - cfg.tauD; }
 function tauEnd(): number { return cfg.tauC + cfg.tauD; }
@@ -321,7 +321,7 @@ bindNumeric('n', 'n-num',
 // the τ=0 seam continuously (e.g. tauC=0, tauD=0.1 → [-0.1, 0.1]).
 bindNumeric('tauc', 'tauc-num',
   { toNum: (v) => v.toFixed(3), clamp: (v) => ((v % 1) + 1) % 1 },
-  (v) => { cfg.tauC = v; invalidatePolygon(); });
+  (v) => { cfg.tauC = v; updateVkButton(); invalidatePolygon(); });
 
 bindNumeric('taud', 'taud-num',
   { toNum: (v) => v.toFixed(3), clamp: (v) => Math.max(0, Math.min(0.5, v)) },
@@ -361,10 +361,29 @@ $('toggle-boundaries').addEventListener('click', () => {
   $('toggle-boundaries').textContent = next ? 'Hide boundaries' : 'Show boundaries';
 });
 $('toggle-vk').addEventListener('click', () => {
+  if (!isSectorSymmetric()) return;
   const next = !canvas.getShowVk();
   canvas.setShowVk(next);
   $('toggle-vk').textContent = next ? 'Hide V_k' : 'Show V_k';
 });
+
+// V_k = ρ(U_k) only holds when R is symmetric (centred on a symmetry line,
+// τc = 0 here = mutual apogee, P_a). Disable the toggle when it's not.
+function isSectorSymmetric(): boolean {
+  return Math.abs(cfg.tauC) < 1e-6;
+}
+function updateVkButton(): void {
+  const btn = $<HTMLButtonElement>('toggle-vk');
+  const sym = isSectorSymmetric();
+  btn.disabled = !sym;
+  btn.title = sym
+    ? 'V_k = ρ(U_k) — reflection of the sector image'
+    : 'V_k = ρ(U_k) only when τc = 0 (sector centred on P)';
+  if (!sym && canvas.getShowVk()) {
+    canvas.setShowVk(false);
+    btn.textContent = 'Show V_k';
+  }
+}
 
 // ---------- Zoom tool + view history (left panel only) ----------
 
@@ -1015,3 +1034,4 @@ updateTabLinks();
 canvas.setVMax(cfg.vMax);
 updateSectorDisplay();
 updateZoomButtons();
+updateVkButton();
