@@ -934,18 +934,18 @@ function onWorkerMsg(ev: MessageEvent<HorseshoeWorkerToMain>): void {
       } else if (phase === 'sector-edges') {
         consumeEdgeResults(tauStars, vStars, escapes);
       } else if (phase === 'sector-refining') {
-        // Reject midpoints that don't lie ON the parent segment. By the
-        // triangle inequality distA + distB ≥ parentDist always, with
-        // equality iff the midpoint is exactly on segment A-B. A large
-        // ratio (distA + distB ≫ parentDist) means the midpoint shoot
-        // landed in a different basin (chaos). Inserting such a mid
-        // would create a triangular spike that disorders the polygon —
-        // discard it entirely instead.
-        //
-        // Per-sub-gap ratio check prevents infinite refinement of a
-        // single sub-gap that's nearly as long as its parent (the chaos
-        // signature for asymmetric splits).
-        const OFF_SEGMENT_RATIO = 1.25; // sum-vs-parent: > this = chaotic
+        // Reject midpoints that would distort the polygon shape:
+        //   - PERIMETER ratio (distA + distB) / parent > 1.10 means the
+        //     midpoint lies far enough off the line A-B that inserting
+        //     it creates a visible kink in the polygon outline. Tightened
+        //     from 1.25 because even ~37% perpendicular offset shows.
+        //   - DOT product test (mid-A) · (B-mid) ≤ 0 means the polygon
+        //     would actually REVERSE direction at the new node — that's
+        //     the "doubling back" pathology that turns a smooth curve
+        //     into a zigzag.
+        //   - Per-sub-gap ratio (sub > CHAOS_RATIO × parent) prevents
+        //     infinite refinement of an asymmetric chaotic side.
+        const OFF_SEGMENT_RATIO = 1.10;
         const CHAOS_RATIO = 0.75;
         for (let i = 0; i < pending.length; i++) {
           const p = pending[i];
@@ -959,8 +959,8 @@ function onWorkerMsg(ev: MessageEvent<HorseshoeWorkerToMain>): void {
           const distA = Math.hypot(dxA, dyA);
           const dxB = p.gap.bx - mid.x, dyB = p.gap.by - mid.y;
           const distB = Math.hypot(dxB, dyB);
-          // Off-segment test: midpoint should lie close to line A-B.
           if (distA + distB > OFF_SEGMENT_RATIO * parentDist) continue;
+          if (dxA * dxB + dyA * dyB <= 0) continue;  // anti-doubling
           const sActual = ((p.sMid % 4) + 4) % 4;
           const node: PolygonNode = {
             s: sActual, tau0: p.tau0, v0: p.v0,
