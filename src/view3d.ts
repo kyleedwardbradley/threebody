@@ -73,7 +73,9 @@ export class View3D {
       this.scene.background = new THREE.Color(cssToHex(getPalette().bgCanvasOuter, 0x06060e));
     });
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    // preserveDrawingBuffer lets canvas.toDataURL() return a populated
+    // image so the Export PDF button can capture the 3D view.
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
     this.renderer.setPixelRatio(window.devicePixelRatio || 1);
     container.appendChild(this.renderer.domElement);
 
@@ -342,6 +344,14 @@ export class View3D {
     this.updateRipples(performance.now());
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
+  }
+
+  // Force a fresh render so canvas.toDataURL() captures the current scene
+  // (some browsers clear the WebGL buffer between frames). Called by the
+  // PDF export.
+  getCanvas(): HTMLCanvasElement {
+    this.render();
+    return this.renderer.domElement;
   }
 
   private onResize(): void {

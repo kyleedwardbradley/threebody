@@ -1,10 +1,12 @@
 import { initTheme, mountThemeToggle } from './theme';
+import { registerExport, mountExportButton } from './exportPdf';
 initTheme();
 import { View3D } from './view3d';
 import { PolarPlot } from './polarPlot';
 import { TimePlot } from './timePlot';
 import { PhasePlot } from './phasePlot';
 import { bodyState } from './physics/kepler';
+mountExportButton();
 mountThemeToggle();
 import SimWorker from './worker?worker';
 import {
@@ -22,6 +24,13 @@ const view3d = new View3D($('view3d'));
 const polar = new PolarPlot($<HTMLCanvasElement>('polar-canvas'));
 const phasePlot = new PhasePlot($<HTMLCanvasElement>('phase-canvas'));
 const ztPlot = new TimePlot($<HTMLCanvasElement>('zt-canvas'));
+
+registerExport(() => [
+  { canvas: view3d.getCanvas(), label: '3D view' },
+  { canvas: ztPlot.canvas,      label: 'z(t)' },
+  { canvas: polar.canvas,       label: 'Polar (τ, |v|)' },
+  { canvas: phasePlot.canvas,   label: 'Poincaré (z, z′)' },
+], 'single-orbit');
 
 const worker: Worker = new SimWorker();
 

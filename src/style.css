@@ -119,7 +119,8 @@ html, body {
   border-bottom-color: var(--border-accent);
 }
 .tab-bar .spacer { flex: 1; }
-.tab-bar .theme-toggle {
+.tab-bar .theme-toggle,
+.tab-bar .export-pdf {
   align-self: center;
   background: var(--bg-button);
   color: var(--text-primary);
@@ -129,8 +130,10 @@ html, body {
   font-size: 11px;
   cursor: pointer;
   font-family: inherit;
+  margin-right: 4px;
 }
-.tab-bar .theme-toggle:hover { background: var(--bg-button-hover); }
+.tab-bar .theme-toggle:hover,
+.tab-bar .export-pdf:hover { background: var(--bg-button-hover); }
 
 #controls {
   padding: 16px; background: var(--bg-panel); border-right: 1px solid var(--border);
