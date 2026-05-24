@@ -95,6 +95,7 @@ export class HorseshoeCanvas {
 
   setViewRect(r: ViewRect | null): void {
     this.viewRect = r;
+    this.offValid = false;       // heatmap is zoom-aware; invalidate cache
     this.draw();
   }
   getViewRect(): ViewRect | null { return this.viewRect; }
@@ -321,11 +322,11 @@ export class HorseshoeCanvas {
     this.canvas.height = Math.floor(h * dpr);
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    // Offscreen heatmap: CSS-pixel sized + identity transform. ImageData
-    // operations bypass canvas transforms, so keeping this 1:1 with CSS
-    // pixels avoids the "stamp in upper-left quadrant" trap on retina.
-    this.off.width = Math.floor(w);
-    this.off.height = Math.floor(h);
+    // Offscreen heatmap is sized to the canvas's DEVICE pixels so we
+    // can blit it 1:1 onto the visible canvas at full retina resolution
+    // regardless of zoom factor.
+    this.off.width = Math.floor(w * dpr);
+    this.off.height = Math.floor(h * dpr);
     this.offCtx.setTransform(1, 0, 0, 1, 0, 0);
     this.offValid = false;
     this.draw();
@@ -374,41 +375,50 @@ export class HorseshoeCanvas {
 
   private rasterise(): void {
     const ctx = this.offCtx;
-    const wi = this.off.width;
+    const wi = this.off.width;   // device pixels
     const hi = this.off.height;
     ctx.clearRect(0, 0, wi, hi);
-
     if (!this.tauStars || this.n === 0) { this.offValid = true; return; }
 
-    const cx = wi / 2, cy = hi / 2;
-    const R = Math.max(0, Math.min(wi, hi) / 2 - 28);
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = this.canvas.clientWidth;
+    const cssH = this.canvas.clientHeight;
+    // Disc geometry in NATURAL CSS pixels (same convention as everywhere else).
+    const cx = cssW / 2, cy = cssH / 2;
+    const R = Math.max(0, Math.min(cssW, cssH) / 2 - 28);
     if (R <= 0) { this.offValid = true; return; }
+
+    // Inverse zoom: each device pixel (dpx, dpy) of the canvas maps to a
+    // natural CSS pixel via the viewRect. The natural pixel is then run
+    // through the standard polar inverse to get (τ, v).
+    const vr = this.viewRect ?? { x: 0, y: 0, w: cssW, h: cssH };
+    const dxOffset = vr.x - cx;
+    const dyOffset = vr.y - cy;
+    const pxScale = vr.w / (cssW * dpr);   // natural Δx per device px
+    const pyScale = vr.h / (cssH * dpr);
 
     const n = this.n;
     const displayVMax = this.vMax;
-    const stMin = this.scanTauMin;
-    const stMax = this.scanTauMax;
-    const svMin = this.scanVMin;
-    const svMax = this.scanVMax;
+    const stMin = this.scanTauMin, stMax = this.scanTauMax;
+    const svMin = this.scanVMin,   svMax = this.scanVMax;
     const tSpan = stMax - stMin;
     const vSpan = svMax - svMin;
-    // Per-pixel sampling at NATURAL canvas coords. A pixel only contributes
-    // if its (τ, v) lands in the stored scan rectangle.
+    const tauMid = (stMin + stMax) / 2;
+
     const imageData = ctx.createImageData(wi, hi);
     const data = imageData.data;
-    for (let py = 0; py < hi; py++) {
-      const dy = py - cy;
-      for (let px = 0; px < wi; px++) {
-        const dx = px - cx;
-        const rad = Math.hypot(dx, dy);
+    for (let dpy = 0; dpy < hi; dpy++) {
+      const dyNat = dyOffset + dpy * pyScale;
+      for (let dpx = 0; dpx < wi; dpx++) {
+        const dxNat = dxOffset + dpx * pxScale;
+        const rad = Math.hypot(dxNat, dyNat);
         if (rad > R) continue;
         const vDisplay = (rad / R) * displayVMax;
         if (vDisplay < svMin || vDisplay > svMax) continue;
-        const ang = Math.atan2(dy, dx) + Math.PI / 2;
+        const ang = Math.atan2(dyNat, dxNat) + Math.PI / 2;
         let tau = ang / (2 * Math.PI);
         tau = tau - Math.floor(tau);
-        // Unwrap τ to the closest representative in the scan range.
-        const k = Math.round(((stMin + stMax) / 2 - tau));
+        const k = Math.round(tauMid - tau);
         const tauU = tau + k;
         if (tauU < stMin || tauU > stMax) continue;
         const i = Math.min(n - 1, Math.max(0, Math.floor(((tauU - stMin) / tSpan) * n)));
@@ -416,7 +426,7 @@ export class HorseshoeCanvas {
         const ts = this.tauStars[j * n + i];
         if (isNaN(ts)) continue;
         const [r, g, b] = cyclicColor(ts);
-        const idx = (py * wi + px) * 4;
+        const idx = (dpy * wi + dpx) * 4;
         data[idx] = r;
         data[idx + 1] = g;
         data[idx + 2] = b;
@@ -487,7 +497,13 @@ export class HorseshoeCanvas {
 
     if (this.showGrid) {
       if (!this.offValid) this.rasterise();
-      ctx.drawImage(this.off, 0, 0, w, h);
+      // Blit at 1:1 device pixels (no zoom stretch — the rasterise already
+      // baked the current zoom in). This keeps the heatmap sharp at any
+      // zoom factor.
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.drawImage(this.off, 0, 0);
+      ctx.restore();
     }
 
     // Image dots: cell (i, j) plotted at (τ*, |v*|) coloured by τ₀.
