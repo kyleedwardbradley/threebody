@@ -157,11 +157,23 @@ function boundaryParam(s: number): { tau0: number; v0: number } {
   }
 }
 
+// Visual screen-pixel coords of (τ, v) — accounts for the current
+// viewport-zoom transform on the main canvas. Refinement compares gaps in
+// visual pixels so a 1-pixel threshold means 1 pixel as the user sees it.
 function screenXY(tau: number, v: number): { x: number; y: number } {
   const g = canvas.getDiscGeometry();
   const r = (v / g.vMax) * g.R;
   const a = tau * 2 * Math.PI - Math.PI / 2;
-  return { x: g.cx + r * Math.cos(a), y: g.cy + r * Math.sin(a) };
+  const nx = g.cx + r * Math.cos(a);
+  const ny = g.cy + r * Math.sin(a);
+  const vr = canvas.getViewRect();
+  if (!vr) return { x: nx, y: ny };
+  const cw = canvas.canvas.clientWidth;
+  const ch = canvas.canvas.clientHeight;
+  return {
+    x: ((nx - vr.x) / vr.w) * cw,
+    y: ((ny - vr.y) / vr.h) * ch,
+  };
 }
 
 // Max-heap on Gap.dist.
