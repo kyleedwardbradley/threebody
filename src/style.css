@@ -1,7 +1,84 @@
+/*
+ * Theme variables. Dark is the default; data-theme="light" on <html> swaps
+ * the palette. Canvas-rendered colors read these via getComputedStyle from
+ * src/theme.ts; CSS rules below reference the same variables.
+ */
+:root[data-theme="dark"], :root:not([data-theme]) {
+  --bg:                  #0a0a12;
+  --bg-panel:            #10101a;
+  --bg-canvas:           #0a0a12;
+  --bg-canvas-outer:     #06060e;
+  --bg-input:            #161620;
+  --bg-input-focus:      #1a2030;
+  --bg-button:           #1a1a24;
+  --bg-button-hover:     #24243a;
+  --bg-button-active:    #1e3050;
+  --bg-button-active-ring:#3a66a0;
+  --bg-tab:              #0d0d16;
+  --text-primary:        #dddddd;
+  --text-secondary:      #d7ecff;
+  --text-muted:          #8a8fa5;
+  --border:              #22222e;
+  --border-input:        #2a2a36;
+  --border-accent:       #4a7fb8;
+  --color-up:            #66ff99;
+  --color-dn:            #ff6a9a;
+  --color-escape:        #ff3a6a;
+  --color-blue:          rgba(80, 140, 255, 0.7);
+  --color-red:           rgba(255, 90, 90, 0.7);
+  --plot-border:         #3a3a48;
+  --grid-line:           rgba(180, 200, 230, 0.10);
+  --grid-line-strong:    rgba(180, 200, 230, 0.18);
+  --polygon-fill:        rgb(220, 90, 90);
+  --vk-fill:             rgba(80, 140, 255, 0.40);
+  --sector-fill:         rgba(80, 140, 255, 0.30);
+  --sector-stroke:       rgba(140, 180, 255, 0.9);
+  --d0-line:             #ffd24a;
+  --d1-line:             #5fd07a;
+  --p-marker-fill:       #ffffff;
+  --p-marker-stroke:     #000000;
+}
+
+:root[data-theme="light"] {
+  --bg:                  #f5f5f7;
+  --bg-panel:            #ffffff;
+  --bg-canvas:           #fbfbfd;
+  --bg-canvas-outer:     #eceef2;
+  --bg-input:            #ffffff;
+  --bg-input-focus:      #e8eef8;
+  --bg-button:           #ffffff;
+  --bg-button-hover:     #eef0f4;
+  --bg-button-active:    #d6e6ff;
+  --bg-button-active-ring:#7aa7da;
+  --bg-tab:              #ededf2;
+  --text-primary:        #1a1a22;
+  --text-secondary:      #14365f;
+  --text-muted:          #5a5e6e;
+  --border:              #d2d2da;
+  --border-input:        #c8c8d2;
+  --border-accent:       #4a7fb8;
+  --color-up:            #1aa84c;
+  --color-dn:            #d63a78;
+  --color-escape:        #d12648;
+  --color-blue:          rgba(40, 90, 200, 0.7);
+  --color-red:           rgba(200, 60, 60, 0.7);
+  --plot-border:         #b8b8c4;
+  --grid-line:           rgba(20, 30, 60, 0.08);
+  --grid-line-strong:    rgba(20, 30, 60, 0.18);
+  --polygon-fill:        rgb(210, 70, 70);
+  --vk-fill:             rgba(40, 90, 200, 0.32);
+  --sector-fill:         rgba(80, 140, 255, 0.22);
+  --sector-stroke:       rgba(40, 80, 160, 0.85);
+  --d0-line:             #b58400;
+  --d1-line:             #2e8a3e;
+  --p-marker-fill:       #1a1a22;
+  --p-marker-stroke:     #ffffff;
+}
+
 * { box-sizing: border-box; }
 html, body {
   margin: 0; padding: 0; height: 100%; overflow: hidden;
-  background: #0a0a12; color: #ddd;
+  background: var(--bg); color: var(--text-primary);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
 }
 #app {
@@ -19,8 +96,8 @@ html, body {
   height: 32px;
   display: flex;
   align-items: stretch;
-  background: #0d0d16;
-  border-bottom: 1px solid #22222e;
+  background: var(--bg-tab);
+  border-bottom: 1px solid var(--border);
   padding: 0 8px;
   gap: 4px;
 }
@@ -31,19 +108,32 @@ html, body {
   font-size: 11.5px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: #8a8fa5;
+  color: var(--text-muted);
   text-decoration: none;
   border-bottom: 2px solid transparent;
   transition: color 0.15s, border-color 0.15s;
 }
-.tab-bar .tab:hover { color: #d7ecff; }
+.tab-bar .tab:hover { color: var(--text-secondary); }
 .tab-bar .tab.active {
-  color: #d7ecff;
-  border-bottom-color: #4a7fb8;
+  color: var(--text-secondary);
+  border-bottom-color: var(--border-accent);
 }
+.tab-bar .spacer { flex: 1; }
+.tab-bar .theme-toggle {
+  align-self: center;
+  background: var(--bg-button);
+  color: var(--text-primary);
+  border: 1px solid var(--border-input);
+  border-radius: 3px;
+  padding: 3px 9px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.tab-bar .theme-toggle:hover { background: var(--bg-button-hover); }
 
 #controls {
-  padding: 16px; background: #10101a; border-right: 1px solid #22222e;
+  padding: 16px; background: var(--bg-panel); border-right: 1px solid var(--border);
   overflow-y: auto;
 }
 #controls h1 { font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase;
@@ -56,31 +146,31 @@ html, body {
 .control .val { font-variant-numeric: tabular-nums; font-size: 11px; opacity: 0.8; }
 .control .num {
   width: 76px;
-  background: #161620; color: #ddd;
-  border: 1px solid #2a2a36; border-radius: 3px;
+  background: var(--bg-input); color: var(--text-primary);
+  border: 1px solid var(--border-input); border-radius: 3px;
   padding: 2px 5px; font-size: 11px;
   font-variant-numeric: tabular-nums;
   text-align: right;
   font-family: inherit;
 }
-.control .num:focus { outline: none; border-color: #4a7fb8; background: #1a2030; }
+.control .num:focus { outline: none; border-color: var(--border-accent); background: var(--bg-input-focus); }
 .control label > span { flex: 1; }
 .control input[type=range] { width: 100%; }
 .control select {
-  width: 100%; background: #1a1a24; color: #ddd;
-  border: 1px solid #2a2a36; padding: 6px; border-radius: 3px; font-size: 12px;
+  width: 100%; background: var(--bg-button); color: var(--text-primary);
+  border: 1px solid var(--border-input); padding: 6px; border-radius: 3px; font-size: 12px;
 }
 .buttons { display: flex; gap: 6px; margin-top: 12px; }
 .buttons button {
-  flex: 1; padding: 6px; background: #1a1a24; color: #ddd;
-  border: 1px solid #2a2a36; border-radius: 3px; cursor: pointer; font-size: 12px;
+  flex: 1; padding: 6px; background: var(--bg-button); color: var(--text-primary);
+  border: 1px solid var(--border-input); border-radius: 3px; cursor: pointer; font-size: 12px;
 }
-.buttons button:hover { background: #24243a; }
+.buttons button:hover { background: var(--bg-button-hover); }
 .buttons button.active {
-  background: #1e3050;
-  border-color: #4a7fb8;
-  color: #d7ecff;
-  box-shadow: 0 0 0 1px #3a66a0 inset;
+  background: var(--bg-button-active);
+  border-color: var(--border-accent);
+  color: var(--text-secondary);
+  box-shadow: 0 0 0 1px var(--bg-button-active-ring) inset;
 }
 #status {
   margin-top: 14px; font-size: 11px; opacity: 0.7; font-variant-numeric: tabular-nums;
@@ -91,16 +181,16 @@ html, body {
   display: inline-block; width: 9px; height: 9px; border-radius: 50%;
   vertical-align: middle; margin-right: 6px;
 }
-.legend .up { background: #66ff99; }
-.legend .dn { background: #ff6a9a; }
-.legend .esc { background: #ff3a6a; }
-.legend .blue { background: rgba(80, 140, 255, 0.7); }
-.legend .red  { background: rgba(255, 90, 90, 0.7); }
+.legend .up { background: var(--color-up); }
+.legend .dn { background: var(--color-dn); }
+.legend .esc { background: var(--color-escape); }
+.legend .blue { background: var(--color-blue); }
+.legend .red  { background: var(--color-red); }
 
 #controls h2.section {
   font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
   margin: 18px 0 8px; opacity: 0.55; font-weight: 600;
-  border-top: 1px solid #22222e; padding-top: 12px;
+  border-top: 1px solid var(--border); padding-top: 12px;
 }
 
 /* Segmented (radio-like) button group */
@@ -111,21 +201,21 @@ html, body {
 }
 .seg-btn {
   flex: 1;
-  background: #1a1a24;
-  color: #ddd;
-  border: 1px solid #2a2a36;
+  background: var(--bg-button);
+  color: var(--text-primary);
+  border: 1px solid var(--border-input);
   border-radius: 3px;
   padding: 4px 6px;
   font-size: 11px;
   cursor: pointer;
   font-family: inherit;
 }
-.seg-btn:hover { background: #24243a; }
+.seg-btn:hover { background: var(--bg-button-hover); }
 .seg-btn.active {
-  background: #1e3050;
-  border-color: #4a7fb8;
-  color: #d7ecff;
-  box-shadow: 0 0 0 1px #3a66a0 inset;
+  background: var(--bg-button-active);
+  border-color: var(--border-accent);
+  color: var(--text-secondary);
+  box-shadow: 0 0 0 1px var(--bg-button-active-ring) inset;
 }
 .note { margin-top: 12px; font-size: 10.5px; opacity: 0.55; line-height: 1.5; }
 
@@ -134,7 +224,7 @@ html, body {
   grid-template-columns: 1fr 1fr;
   grid-template-rows: 1fr 1fr;
   gap: 1px;
-  background: #22222e;
+  background: var(--border);
   min-width: 0;
   min-height: 0;
   height: 100%;
@@ -149,7 +239,7 @@ html, body {
 }
 #main.hs-dual .panel {
   position: relative;
-  background: #0a0a12;
+  background: var(--bg-canvas);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -167,20 +257,20 @@ html, body {
   display: flex; gap: 4px;
 }
 .hs-toolbar button {
-  background: #1a1a24;
-  color: #ddd;
-  border: 1px solid #2a2a36;
+  background: var(--bg-button);
+  color: var(--text-primary);
+  border: 1px solid var(--border-input);
   border-radius: 3px;
   padding: 3px 8px;
   font-size: 11px;
   cursor: pointer;
   font-family: inherit;
 }
-.hs-toolbar button:hover { background: #24243a; }
+.hs-toolbar button:hover { background: var(--bg-button-hover); }
 .hs-toolbar button.active {
-  background: #1e3050;
-  border-color: #4a7fb8;
-  color: #d7ecff;
+  background: var(--bg-button-active);
+  border-color: var(--border-accent);
+  color: var(--text-secondary);
 }
 .hs-toolbar button:disabled {
   opacity: 0.3;
@@ -193,7 +283,7 @@ html, body {
 }
 #main.single-pane .panel {
   position: relative;
-  background: #0a0a12;
+  background: var(--bg-canvas);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -207,7 +297,7 @@ html, body {
 }
 #main.dual-pane .panel {
   position: relative;
-  background: #0a0a12;
+  background: var(--bg-canvas);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -220,7 +310,7 @@ html, body {
 #polar  { grid-column: 2; grid-row: 1; }
 #phase  { grid-column: 2; grid-row: 2; }
 #view3d, #polar, #phase, #ztplot {
-  background: #0a0a12;
+  background: var(--bg-canvas);
   position: relative;
   overflow: hidden;
   min-width: 0;
@@ -234,7 +324,7 @@ html, body {
   top: 8px; right: 10px;
   z-index: 2;
   display: flex; align-items: center; gap: 6px;
-  font-size: 11px; color: #8a8fa5;
+  font-size: 11px; color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
 .polar-controls label { display: flex; align-items: center; gap: 5px; }
@@ -244,7 +334,7 @@ html, body {
   top: 8px; right: 10px;
   z-index: 2;
   display: flex; align-items: center; gap: 6px;
-  font-size: 11px; color: #8a8fa5;
+  font-size: 11px; color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
 .tplot-controls label { display: flex; align-items: center; gap: 5px; }

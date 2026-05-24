@@ -4,6 +4,7 @@
 // rectangle, so a narrow polar sector becomes a usable rectangle.
 
 import type { SectorRect, PolygonPoint } from './horseshoeCanvas';
+import { getPalette, onThemeChange } from './theme';
 
 export interface ZoomRange {
   tauMin: number; tauMax: number;
@@ -42,6 +43,7 @@ export class HorseshoeZoom {
     this.ctx = ctx;
     this.resize();
     new ResizeObserver(() => this.resize()).observe(canvas);
+    onThemeChange(() => this.draw());
   }
 
   beginGrid(
@@ -141,15 +143,16 @@ export class HorseshoeZoom {
     const ctx = this.ctx;
     const cw = this.canvas.clientWidth;
     const ch = this.canvas.clientHeight;
+    const T = getPalette();
     ctx.clearRect(0, 0, cw, ch);
-    ctx.fillStyle = '#06060e';
+    ctx.fillStyle = T.bgCanvasOuter;
     ctx.fillRect(0, 0, cw, ch);
 
     const p = this.plotRect();
     if (p.w <= 0 || p.h <= 0) return;
 
     // Plot background
-    ctx.fillStyle = '#0a0a12';
+    ctx.fillStyle = T.bgCanvas;
     ctx.fillRect(p.x, p.y, p.w, p.h);
 
     // Grid heatmap: draw each visible cell as a filled rect in (τ, v).
@@ -234,8 +237,8 @@ export class HorseshoeZoom {
       const x1 = this.toX(s.tauE);
       const y0 = this.toY(s.vE);
       const y1 = this.toY(s.vS);
-      ctx.fillStyle = 'rgba(80, 140, 255, 0.30)';
-      ctx.strokeStyle = 'rgba(140, 180, 255, 0.9)';
+      ctx.fillStyle = T.sectorFill;
+      ctx.strokeStyle = T.sectorStroke;
       ctx.lineWidth = 1.2;
       ctx.beginPath();
       ctx.rect(x0, y0, x1 - x0, y1 - y0);
@@ -324,22 +327,22 @@ export class HorseshoeZoom {
       ctx.restore();
     };
 
-    // Polygon (U_k = φ(R) ∩ R) outline in solid red — matches the polar
-    // canvas's solid red U_k fill colour.
+    // Polygon (U_k = φ(R) ∩ R) outline — matches the polar canvas's
+    // U_k fill colour.
     if (this.polygon && this.polygon.length > 2) {
-      drawPolyline(this.polygon, 'rgb(220, 90, 90)', 1.2, (t) => t, false);
+      drawPolyline(this.polygon, T.polygonFill, 1.2, (t) => t, false);
     }
 
     // V_k = φ⁻¹(R) ∩ R. Stored as its own polygon (vkPolygon) by
     // horseshoe.ts; drawn in blue.
     if (this.vkPolygon && this.showVk && this.vkPolygon.length > 2) {
-      drawPolyline(this.vkPolygon, 'rgba(80, 140, 255, 0.85)', 1.2, (t) => t, false);
+      drawPolyline(this.vkPolygon, T.vkFill, 1.2, (t) => t, false);
     }
 
     // ∂D₀ (yellow) and ∂D₁ = ρ(∂D₀) (green) boundary curves.
     if (this.showBoundaries && this.boundaryD0 && this.boundaryD0.length > 1) {
-      drawPolyline(this.boundaryD0, '#ffd24a', 1.5, (t) => t, true);
-      drawPolyline(this.boundaryD0, '#5fd07a', 1.5, (t) => -t, true);
+      drawPolyline(this.boundaryD0, T.d0Line, 1.5, (t) => t, true);
+      drawPolyline(this.boundaryD0, T.d1Line, 1.5, (t) => -t, true);
     }
 
     // P markers — render at any τ-shift that lands inside the window.
@@ -354,18 +357,18 @@ export class HorseshoeZoom {
           if (tauU < r.tauMin || tauU > r.tauMax) continue;
           const x = this.toX(tauU);
           const y = this.toY(pt.v);
-          ctx.fillStyle = '#fff';
-          ctx.strokeStyle = '#000';
+          ctx.fillStyle = T.pMarkerFill;
+          ctx.strokeStyle = T.pMarkerStroke;
           ctx.lineWidth = 1.5;
           ctx.beginPath();
           ctx.arc(x, y, 5, 0, Math.PI * 2);
           ctx.fill();
           ctx.stroke();
-          ctx.fillStyle = '#fff';
+          ctx.fillStyle = T.pMarkerFill;
           ctx.font = 'bold 12px -apple-system, system-ui, sans-serif';
           ctx.textAlign = 'left';
           ctx.textBaseline = 'middle';
-          ctx.strokeStyle = '#000';
+          ctx.strokeStyle = T.pMarkerStroke;
           ctx.lineWidth = 3;
           const label = pt.label ?? 'P';
           ctx.strokeText(label, x + 8, y);
@@ -375,10 +378,10 @@ export class HorseshoeZoom {
     }
 
     // Border + axis labels
-    ctx.strokeStyle = '#3a3a48';
+    ctx.strokeStyle = T.plotBorder;
     ctx.lineWidth = 1;
     ctx.strokeRect(p.x + 0.5, p.y + 0.5, p.w - 1, p.h - 1);
-    ctx.fillStyle = '#8a8fa5';
+    ctx.fillStyle = T.textMuted;
     ctx.font = '10px -apple-system, system-ui, sans-serif';
     // x ticks (τ)
     ctx.textAlign = 'center';
@@ -390,7 +393,7 @@ export class HorseshoeZoom {
       ctx.beginPath();
       ctx.moveTo(x, p.y + p.h);
       ctx.lineTo(x, p.y + p.h + 3);
-      ctx.strokeStyle = '#8a8fa5';
+      ctx.strokeStyle = T.textMuted;
       ctx.stroke();
       ctx.fillText(t.toFixed(3), x, p.y + p.h + 5);
     }
@@ -408,7 +411,7 @@ export class HorseshoeZoom {
       ctx.fillText(v.toFixed(3), p.x - 5, y);
     }
     // Axis titles
-    ctx.fillStyle = '#8a8fa5';
+    ctx.fillStyle = T.textMuted;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
     ctx.fillText('τ', p.x + p.w / 2, p.y + p.h + 22);

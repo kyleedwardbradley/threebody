@@ -1,3 +1,5 @@
+import { getPalette, onThemeChange } from './theme';
+
 export interface PolarPoint { tau: number; v: number; }
 
 // Polar scatter: θ = 2π·τ (with τ=0 at "top", clockwise through the year),
@@ -16,6 +18,7 @@ export class PolarPlot {
     this.resize();
     const ro = new ResizeObserver(() => this.resize());
     ro.observe(canvas);
+    onThemeChange(() => this.draw());
   }
 
   clear(): void {
@@ -51,8 +54,9 @@ export class PolarPlot {
     const ctx = this.ctx;
     const w = this.canvas.clientWidth;
     const h = this.canvas.clientHeight;
+    const T = getPalette();
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = '#06060e';
+    ctx.fillStyle = T.bgCanvasOuter;
     ctx.fillRect(0, 0, w, h);
 
     const cx = w / 2;
@@ -62,10 +66,10 @@ export class PolarPlot {
 
     const rMax = this.vMax;
 
-    ctx.strokeStyle = '#1e2638';
+    ctx.strokeStyle = T.gridLineStrong;
     ctx.lineWidth = 1;
     ctx.font = '10px -apple-system, system-ui, sans-serif';
-    ctx.fillStyle = '#556';
+    ctx.fillStyle = T.textMuted;
     const rings = 4;
     for (let i = 1; i <= rings; i++) {
       const r = (R * i) / rings;
@@ -75,7 +79,7 @@ export class PolarPlot {
       ctx.fillText(((rMax * i) / rings).toFixed(2), cx + 3, cy - r - 2);
     }
 
-    ctx.strokeStyle = '#1a2030';
+    ctx.strokeStyle = T.gridLine;
     for (let m = 0; m < 12; m++) {
       const a = angleForTau(m / 12);
       ctx.beginPath();
@@ -83,7 +87,7 @@ export class PolarPlot {
       ctx.lineTo(cx + R * Math.cos(a), cy + R * Math.sin(a));
       ctx.stroke();
     }
-    ctx.fillStyle = '#8a8fa5';
+    ctx.fillStyle = T.textMuted;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     const months = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
@@ -100,13 +104,13 @@ export class PolarPlot {
       const r = (mag / rMax) * R;
       const x = cx + r * Math.cos(a);
       const y = cy + r * Math.sin(a);
-      ctx.fillStyle = p.v >= 0 ? '#66ff99' : '#ff6a9a';
+      ctx.fillStyle = p.v >= 0 ? T.colorUp : T.colorDn;
       ctx.beginPath();
       ctx.arc(x, y, 1.9, 0, Math.PI * 2);
       ctx.fill();
     }
 
-    ctx.fillStyle = '#8a8fa5';
+    ctx.fillStyle = T.textMuted;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     ctx.fillText(`N = ${this.points.length}`, 10, 8);

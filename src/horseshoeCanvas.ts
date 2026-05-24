@@ -10,6 +10,8 @@
 // Heatmap pixels are rasterised to an offscreen canvas as grid rows
 // arrive; the main draw composits offscreen + overlays each redraw.
 
+import { getPalette, onThemeChange } from './theme';
+
 export interface SectorRect {
   tauS: number; tauE: number; // τ₀ bounds (may wrap mod 1)
   vS: number; vE: number;     // v₀ bounds (vS < vE)
@@ -100,6 +102,7 @@ export class HorseshoeCanvas {
     const ro = new ResizeObserver(() => this.resize());
     ro.observe(canvas);
     this.setupMouseHandlers();
+    onThemeChange(() => this.draw());
   }
 
   // ----- zoom-mode API -----
@@ -356,12 +359,13 @@ export class HorseshoeCanvas {
   // ----- rasterise the heatmap -----
 
   private drawColorBar(ctx: CanvasRenderingContext2D, w: number, _h: number): void {
+    const T = getPalette();
     const barW = 150;
     const barH = 10;
     const x = w - barW - 16;
     const y = 30;
     // Header label
-    ctx.fillStyle = '#8a8fa5';
+    ctx.fillStyle = T.textMuted;
     ctx.font = '11px -apple-system, system-ui, sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
@@ -374,12 +378,12 @@ export class HorseshoeCanvas {
       ctx.fillRect(x + px, y, 1, barH);
     }
     // Border
-    ctx.strokeStyle = '#3a3a48';
+    ctx.strokeStyle = T.plotBorder;
     ctx.lineWidth = 1;
     ctx.strokeRect(x + 0.5, y + 0.5, barW - 1, barH - 1);
     // Tick marks + labels
-    ctx.fillStyle = '#8a8fa5';
-    ctx.strokeStyle = '#8a8fa5';
+    ctx.fillStyle = T.textMuted;
+    ctx.strokeStyle = T.textMuted;
     ctx.font = '9px -apple-system, system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
@@ -485,8 +489,9 @@ export class HorseshoeCanvas {
     const ctx = this.ctx;
     const w = this.canvas.clientWidth;
     const h = this.canvas.clientHeight;
+    const T = getPalette();
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = '#06060e';
+    ctx.fillStyle = T.bgCanvasOuter;
     ctx.fillRect(0, 0, w, h);
 
     // Apply viewport-zoom transform: the natural canvas pixels in viewRect
@@ -555,10 +560,10 @@ export class HorseshoeCanvas {
 
     // Rings + spokes. In zoom mode use niceTicks on the zoomed ranges
     // and number labels on spokes; in polar mode use the months scheme.
-    ctx.strokeStyle = '#1e2638';
+    ctx.strokeStyle = T.gridLineStrong;
     ctx.lineWidth = lw(1);
     ctx.font = `${lw(10)}px -apple-system, system-ui, sans-serif`;
-    ctx.fillStyle = '#556';
+    ctx.fillStyle = T.textMuted;
     const ringValues = [this.vMax / 4, this.vMax / 2, (3 * this.vMax) / 4, this.vMax];
     for (const val of ringValues) {
       const r = radiusOf(val);
@@ -568,7 +573,7 @@ export class HorseshoeCanvas {
       ctx.stroke();
       ctx.fillText(val.toFixed(2), cx + 3, cy - r - 2);
     }
-    ctx.strokeStyle = '#1a2030';
+    ctx.strokeStyle = T.gridLine;
     for (let m = 0; m < 12; m++) {
       const a = angleOf(m / 12);
       ctx.beginPath();
@@ -576,7 +581,7 @@ export class HorseshoeCanvas {
       ctx.lineTo(cx + R * Math.cos(a), cy + R * Math.sin(a));
       ctx.stroke();
     }
-    ctx.fillStyle = '#8a8fa5';
+    ctx.fillStyle = T.textMuted;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     const months = ['J','F','M','A','M','J','J','A','S','O','N','D'];
@@ -592,8 +597,8 @@ export class HorseshoeCanvas {
       const rOut = Math.max(0, Math.min(R, radiusOf(s.vE)));
       const aS = angleOf(s.tauS);
       const aE = angleOf(s.tauE);
-      ctx.fillStyle = 'rgba(80, 140, 255, 0.35)';
-      ctx.strokeStyle = 'rgba(140, 180, 255, 0.9)';
+      ctx.fillStyle = T.sectorFill;
+      ctx.strokeStyle = T.sectorStroke;
       ctx.lineWidth = lw(1.2);
       ctx.beginPath();
       const fromA = aS;
@@ -608,7 +613,7 @@ export class HorseshoeCanvas {
     // U_k = φ(R) ∩ R: forward image of the sector. Solid red fill (no
     // outline) so the polygon reads as a region rather than a curve.
     if (this.polygon && this.polygon.length > 2) {
-      ctx.fillStyle = 'rgb(220, 90, 90)';
+      ctx.fillStyle = T.polygonFill;
       ctx.beginPath();
       let started = false;
       for (const p of this.polygon) {
@@ -634,7 +639,7 @@ export class HorseshoeCanvas {
     // so where it crosses U_k (red) and the sector overlay you can read
     // off V_k ∩ R.
     if (this.vkPolygon && this.showVk && this.vkPolygon.length > 2) {
-      ctx.fillStyle = 'rgba(80, 140, 255, 0.40)';
+      ctx.fillStyle = T.vkFill;
       ctx.beginPath();
       let started = false;
       for (const p of this.vkPolygon) {
@@ -676,8 +681,8 @@ export class HorseshoeCanvas {
         }
         ctx.stroke();
       };
-      drawCurve('#ffd24a', (t) => t);           // ∂D₀
-      drawCurve('#5fd07a', (t) => -t);          // ∂D₁ = reflection
+      drawCurve(T.d0Line, (t) => t);            // ∂D₀
+      drawCurve(T.d1Line, (t) => -t);           // ∂D₁ = reflection
     }
 
     // P markers
@@ -689,18 +694,18 @@ export class HorseshoeCanvas {
         const ang = angleOf(unwrap(p.tau));
         const x = cx + rad * Math.cos(ang);
         const y = cy + rad * Math.sin(ang);
-        ctx.fillStyle = '#fff';
-        ctx.strokeStyle = '#000';
+        ctx.fillStyle = T.pMarkerFill;
+        ctx.strokeStyle = T.pMarkerStroke;
         ctx.lineWidth = lw(1.5);
         ctx.beginPath();
         ctx.arc(x, y, lw(5), 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
-        ctx.fillStyle = '#fff';
+        ctx.fillStyle = T.pMarkerFill;
         ctx.font = `bold ${lw(12)}px -apple-system, system-ui, sans-serif`;
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
-        ctx.strokeStyle = '#000';
+        ctx.strokeStyle = T.pMarkerStroke;
         ctx.lineWidth = lw(3);
         const label = p.label ?? 'P';
         ctx.strokeText(label, x + 8, y);
@@ -720,7 +725,7 @@ export class HorseshoeCanvas {
         const r = this.viewRect;
         lines.push(`zoom: ${(w / r.w).toFixed(2)}× × ${(h / r.h).toFixed(2)}×`);
       }
-      ctx.fillStyle = '#8a8fa5';
+      ctx.fillStyle = T.textMuted;
       ctx.font = '11px -apple-system, system-ui, sans-serif';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';

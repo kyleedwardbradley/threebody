@@ -1,6 +1,9 @@
+import { initTheme, mountThemeToggle } from './theme';
+initTheme();
 import { HorseshoeCanvas, type SectorRect, type PolygonPoint, type ViewRect } from './horseshoeCanvas';
 import { HorseshoeZoom, type ZoomRange } from './horseshoeZoom';
 import HorseshoeWorker from './horseshoe-worker?worker';
+mountThemeToggle();
 import type {
   HorseshoeMainToWorker,
   HorseshoeWorkerToMain,
