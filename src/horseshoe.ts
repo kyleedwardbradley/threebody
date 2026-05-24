@@ -93,6 +93,7 @@ type Phase = 'idle' | 'grid'
   | 'sector-refining'  // round-based refinement on the closed boundary
   | 'vk-spirals'       // V_k: shoot reflected sector's two τ-spirals via φ
   | 'vk-edges'         // V_k: shoot reflected sector's top + bottom connectors
+  | 'vk-refining'      // V_k: round-based refinement on V_k boundary
   | 'boundary-initial' // initial K-sample ∂D₀ bisection
   | 'boundary-refining'; // adaptive refinement of ∂D₀ at screen scale
 let phase: Phase = 'idle';
@@ -150,6 +151,7 @@ const vkPolygonNodes: PolygonNode[] = [];
 let vkSpiralK = 0;
 let vkEdgeKtau = 0;
 let vkEffVE = 0;
+let vkPending: PendingGap[] = [];
 const heap: Gap[] = [];                   // max-heap on dist
 let pending: PendingGap[] = [];
 // Refine one gap per round-trip so we strictly process the longest
@@ -375,6 +377,7 @@ $('toggle-boundaries').addEventListener('click', () => {
   $('toggle-boundaries').textContent = next ? 'Hide boundaries' : 'Show boundaries';
 });
 $('run-vk').addEventListener('click', () => runVk());
+$('refine-vk').addEventListener('click', () => startVkRefinement());
 $('toggle-vk').addEventListener('click', () => {
   if (vkPolygonNodes.length === 0) return;
   const next = !canvas.getShowVk();
@@ -488,7 +491,7 @@ function invalidatePolygon(): void {
   const hadPolygon = polygonNodes.length > 0;
   if (worker && (phase === 'sector-spirals' || phase === 'sector-edges'
               || phase === 'sector-refining' || phase === 'vk-spirals'
-              || phase === 'vk-edges')) {
+              || phase === 'vk-edges' || phase === 'vk-refining')) {
     worker.postMessage({ type: 'stop' } as HorseshoeMainToWorker);
     killWorker();
     phase = 'idle';
@@ -505,6 +508,7 @@ function invalidatePolygon(): void {
   updateSectorDisplay();
   updateRefineButton();
   updateVkButton();
+  updateVkRefineButton();
   if (hadPolygon) $('status').textContent = 'sector image cleared (parameters changed)';
 }
 
@@ -531,24 +535,31 @@ function invalidateAll(): void {
 }
 
 function stopAll(): void {
-  const wasSector = phase === 'sector-spirals' || phase === 'sector-edges'
-                 || phase === 'sector-refining' || phase === 'vk-spirals'
-                 || phase === 'vk-edges';
+  const wasUk = phase === 'sector-spirals' || phase === 'sector-edges'
+             || phase === 'sector-refining';
+  const wasVk = phase === 'vk-spirals' || phase === 'vk-edges'
+             || phase === 'vk-refining';
   // finding-p just falls through to idle below
   if (worker) {
     const m: HorseshoeMainToWorker = { type: 'stop' };
     worker.postMessage(m);
     killWorker();
   }
-  if (wasSector) {
+  if (wasUk) {
     phase = 'idle';
     redrawPolygon();
     $('status').textContent = `sector image stopped.  N=${polygonNodes.length}`;
+  } else if (wasVk) {
+    phase = 'idle';
+    applyVk();
+    $('status').textContent = `V_k stopped.  N=${vkPolygonNodes.length}`;
   } else {
     phase = 'idle';
   }
   pending = [];
+  vkPending = [];
   updateRefineButton();
+  updateVkRefineButton();
 }
 
 function runGrid(): void {
@@ -776,6 +787,7 @@ function runVk(): void {
     }
     applyVk();
     updateVkButton();
+    updateVkRefineButton();
     $('status').textContent =
       `V_k = ρ(U_k) (symmetric sector): N=${vkPolygonNodes.length}`;
     return;
@@ -909,9 +921,113 @@ function consumeVkEdgeResults(
   vkPolygonNodes.sort((a, b) => a.s - b.s);
   applyVk();
   updateVkButton();
+  updateVkRefineButton();
   phase = 'idle';
   killWorker();
   $('status').textContent = `V_k done. N=${vkPolygonNodes.length}`;
+}
+
+// V_k uses the same boundary parameterization as U_k (the rectangle's
+// perimeter), with two ρ-reflections wrapped around the shoot: the
+// input τ0 is negated before the worker call, and the result's τ* is
+// negated (and wrapped to [0, 1)) before storage.
+function vkInsertSorted(node: PolygonNode): void {
+  let lo = 0, hi = vkPolygonNodes.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (vkPolygonNodes[mid].s < node.s) lo = mid + 1; else hi = mid;
+  }
+  vkPolygonNodes.splice(lo, 0, node);
+}
+
+function vkScreenXY(tau: number, v: number): { x: number; y: number } {
+  // Mirror screenXY: project (τ, v) into main-canvas pixel space so the
+  // chord-length threshold means "1 visual pixel" the user actually sees.
+  return screenXY(tau, v);
+}
+
+function startVkRefinement(): void {
+  if (phase === 'vk-refining') { stopAll(); return; }
+  if (phase !== 'idle') return;
+  if (vkPolygonNodes.length < 2) {
+    $('status').textContent = 'no V_k to refine — compute V_k first';
+    return;
+  }
+  ensureWorker();
+  phase = 'vk-refining';
+  updateVkRefineButton();
+  vkRefineStep();
+}
+
+function updateVkRefineButton(): void {
+  const btn = $<HTMLButtonElement>('refine-vk');
+  if (!btn) return;
+  btn.textContent = phase === 'vk-refining' ? 'Cancel' : 'Refine V_k';
+  btn.disabled = vkPolygonNodes.length === 0 && phase !== 'vk-refining';
+}
+
+function vkRefineStep(): void {
+  if (!worker || phase !== 'vk-refining') return;
+  const candidates: PendingGap[] = [];
+  let longest = 0;
+  const N = vkPolygonNodes.length;
+  for (let i = 0; i < N; i++) {
+    const a = vkPolygonNodes[i];
+    const b = vkPolygonNodes[(i + 1) % N];
+    if (a.escaped || b.escaped) continue;
+    const pa = vkScreenXY(a.tau, a.v);
+    const pb = vkScreenXY(b.tau, b.v);
+    const dist = Math.hypot(pb.x - pa.x, pb.y - pa.y);
+    if (dist <= THRESHOLD_PX) continue;
+    const sBEff = (i === N - 1) ? b.s + 4 : b.s;
+    const sMid = 0.5 * (a.s + sBEff);
+    // boundaryParam gives the (τ0, v0) on the ORIGINAL sector boundary.
+    // For V_k we shoot the REFLECTED sector, so negate τ0.
+    const orig = boundaryParam(sMid);
+    candidates.push({
+      gap: { sA: a.s, sB: sBEff, ax: pa.x, ay: pa.y, bx: pb.x, by: pb.y, dist },
+      sMid, tau0: -orig.tau0, v0: orig.v0,
+    });
+    if (dist > longest) longest = dist;
+  }
+  if (candidates.length === 0) { vkRefineDone('threshold'); return; }
+  vkPending = candidates;
+  const tau0s = candidates.map((c) => c.tau0);
+  const v0s = candidates.map((c) => c.v0);
+  worker.postMessage({
+    type: 'shoot',
+    req: { e: cfg.e, maxPeriods: cfg.maxPeriods, tau0s, v0s },
+  });
+  $('status').textContent =
+    `refining V_k… N=${vkPolygonNodes.length}  round=${candidates.length}  longest=${longest.toFixed(1)}px`;
+}
+
+function consumeVkRefineResults(
+  tauStars: Float32Array, vStars: Float32Array, escapes: Uint8Array,
+): void {
+  for (let i = 0; i < vkPending.length; i++) {
+    const p = vkPending[i];
+    if (escapes[i] === 1) continue;
+    const sActual = ((p.sMid % 4) + 4) % 4;
+    // Reflect result back: τ → -τ (wrapped into [0, 1)).
+    vkInsertSorted({
+      s: sActual, tau0: p.tau0, v0: p.v0,
+      tau: wrap1(-tauStars[i]), v: vStars[i], escaped: false,
+    });
+  }
+  vkPending = [];
+  applyVk();
+  vkRefineStep();
+}
+
+function vkRefineDone(reason: 'threshold' | 'stopped'): void {
+  phase = 'idle';
+  vkPending = [];
+  applyVk();
+  killWorker();
+  updateVkRefineButton();
+  const tag = reason === 'stopped' ? ' (stopped)' : '';
+  $('status').textContent = `V_k refine done. N=${vkPolygonNodes.length}${tag}`;
 }
 
 // ---------- Refinement: round-based iteration over all segments -----------
@@ -1221,6 +1337,8 @@ function onWorkerMsg(ev: MessageEvent<HorseshoeWorkerToMain>): void {
         consumeVkSpiralResults(tauStars, vStars, escapes);
       } else if (phase === 'vk-edges') {
         consumeVkEdgeResults(tauStars, vStars, escapes);
+      } else if (phase === 'vk-refining') {
+        consumeVkRefineResults(tauStars, vStars, escapes);
       }
       break;
     }
@@ -1286,3 +1404,4 @@ canvas.setVMax(cfg.vMax);
 updateSectorDisplay();
 updateZoomButtons();
 updateVkButton();
+updateVkRefineButton();
