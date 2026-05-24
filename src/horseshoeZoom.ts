@@ -132,38 +132,52 @@ export class HorseshoeZoom {
     ctx.fillRect(p.x, p.y, p.w, p.h);
 
     // Grid heatmap: draw each visible cell as a filled rect in (τ, v).
+    // The zoom range can extend outside [0, 1) when the sector straddles
+    // the τ=0 seam (e.g. tauMin=-0.1), so iterate over integer τ-shifts
+    // that overlap the visible window and render each cell once per shift.
     if (this.showGrid && this.tauStars && this.n > 0) {
       const n = this.n;
       const cellTau = 1 / n;
       const cellV = this.scanVMax / n;
       const r = this.range;
-      const i0 = Math.max(0, Math.floor(r.tauMin / cellTau));
-      const i1 = Math.min(n, Math.ceil(r.tauMax / cellTau) + 1);
       const j0 = Math.max(0, Math.floor(r.vMin / cellV));
       const j1 = Math.min(n, Math.ceil(r.vMax / cellV) + 1);
-      for (let j = j0; j < j1; j++) {
-        for (let i = i0; i < i1; i++) {
-          const ts = this.tauStars[j * n + i];
-          if (isNaN(ts)) continue;
-          const x0 = this.toX(i * cellTau);
-          const x1 = this.toX((i + 1) * cellTau);
-          const y0 = this.toY((j + 1) * cellV);
-          const y1 = this.toY(j * cellV);
-          const xMin = Math.max(p.x, Math.min(x0, x1));
-          const xMax = Math.min(p.x + p.w, Math.max(x0, x1));
-          const yMin = Math.max(p.y, Math.min(y0, y1));
-          const yMax = Math.min(p.y + p.h, Math.max(y0, y1));
-          if (xMax <= xMin || yMax <= yMin) continue;
-          const [rr, gg, bb] = cyclicColor(ts);
-          ctx.fillStyle = `rgb(${rr},${gg},${bb})`;
-          ctx.fillRect(xMin, yMin, xMax - xMin, yMax - yMin);
+      const kLow = Math.floor(r.tauMin);
+      const kHigh = Math.floor(r.tauMax);
+      for (let k = kLow; k <= kHigh; k++) {
+        const localMin = r.tauMin - k;
+        const localMax = r.tauMax - k;
+        const i0 = Math.max(0, Math.floor(localMin / cellTau));
+        const i1 = Math.min(n, Math.ceil(localMax / cellTau) + 1);
+        for (let j = j0; j < j1; j++) {
+          for (let i = i0; i < i1; i++) {
+            const ts = this.tauStars[j * n + i];
+            if (isNaN(ts)) continue;
+            const x0 = this.toX(i * cellTau + k);
+            const x1 = this.toX((i + 1) * cellTau + k);
+            const y0 = this.toY((j + 1) * cellV);
+            const y1 = this.toY(j * cellV);
+            const xMin = Math.max(p.x, Math.min(x0, x1));
+            const xMax = Math.min(p.x + p.w, Math.max(x0, x1));
+            const yMin = Math.max(p.y, Math.min(y0, y1));
+            const yMax = Math.min(p.y + p.h, Math.max(y0, y1));
+            if (xMax <= xMin || yMax <= yMin) continue;
+            const [rr, gg, bb] = cyclicColor(ts);
+            ctx.fillStyle = `rgb(${rr},${gg},${bb})`;
+            ctx.fillRect(xMin, yMin, xMax - xMin, yMax - yMin);
+          }
         }
       }
     }
 
-    // Image dots, coloured by τ₀ (same convention as main canvas).
+    // Image dots, coloured by τ₀ (same convention as main canvas). Iterate
+    // over integer τ-shifts that overlap the visible window so dots near
+    // τ=0.95 also appear at τ=-0.05 when the window is centred near 0.
     if (this.showImage && this.tauStars && this.vStars && this.n > 0) {
       const n = this.n;
+      const r = this.range;
+      const kLow = Math.floor(r.tauMin);
+      const kHigh = Math.floor(r.tauMax);
       ctx.save();
       ctx.beginPath();
       ctx.rect(p.x, p.y, p.w, p.h);
@@ -174,14 +188,17 @@ export class HorseshoeZoom {
           if (isNaN(ts)) continue;
           const vs = this.vStars[j * n + i];
           if (isNaN(vs)) continue;
-          if (ts < this.range.tauMin || ts > this.range.tauMax) continue;
-          if (vs < this.range.vMin || vs > this.range.vMax) continue;
+          if (vs < r.vMin || vs > r.vMax) continue;
           const tau0 = (i + 0.5) / n;
           const [r0, g0, b0] = cyclicColor(tau0);
           ctx.fillStyle = `rgba(${r0},${g0},${b0},0.7)`;
-          ctx.beginPath();
-          ctx.arc(this.toX(ts), this.toY(vs), 1.6, 0, Math.PI * 2);
-          ctx.fill();
+          for (let k = kLow; k <= kHigh; k++) {
+            const tauU = ts + k;
+            if (tauU < r.tauMin || tauU > r.tauMax) continue;
+            ctx.beginPath();
+            ctx.arc(this.toX(tauU), this.toY(vs), 1.6, 0, Math.PI * 2);
+            ctx.fill();
+          }
         }
       }
       ctx.restore();
@@ -217,52 +234,68 @@ export class HorseshoeZoom {
       ctx.clip();
       ctx.strokeStyle = 'rgba(255, 130, 130, 0.95)';
       ctx.lineWidth = 1.2;
+      // Lift the polygon's cyclic τ values into a continuous representation
+      // by unwrapping each node relative to the previous one — a step from
+      // τ=0.97 → τ=0.03 becomes 0.97 → 1.03, so the path stays continuous
+      // across the τ=0 seam instead of jumping back across the plot.
       ctx.beginPath();
       let started = false;
-      let prevTau = 0;
+      let prevTauU = 0;
+      const center = 0.5 * (this.range.tauMin + this.range.tauMax);
       for (const pt of this.polygon) {
         if (pt.escaped || !isFinite(pt.tau) || !isFinite(pt.v)) {
           started = false; continue;
         }
-        const x = this.toX(pt.tau);
-        const y = this.toY(pt.v);
+        let tauU: number;
         if (started) {
-          // Break on apparent τ wrap (polar canvas would render the short
-          // cyclic chord; linear Cartesian would render a long horizontal).
-          if (Math.abs(pt.tau - prevTau) > 0.5) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
+          let delta = pt.tau - prevTauU;
+          // Normalise delta into (-0.5, 0.5] by adding/subtracting 1s.
+          delta -= Math.round(delta);
+          tauU = prevTauU + delta;
         } else {
-          ctx.moveTo(x, y);
+          // Start near the visible window center.
+          tauU = pt.tau - Math.round(pt.tau - center);
         }
-        prevTau = pt.tau;
+        const x = this.toX(tauU);
+        const y = this.toY(pt.v);
+        if (started) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+        prevTauU = tauU;
         started = true;
       }
       ctx.stroke();
       ctx.restore();
     }
 
-    // P markers
-    for (const pt of this.pPoints) {
-      if (pt.tau < this.range.tauMin || pt.tau > this.range.tauMax) continue;
-      if (pt.v < this.range.vMin || pt.v > this.range.vMax) continue;
-      const x = this.toX(pt.tau);
-      const y = this.toY(pt.v);
-      ctx.fillStyle = '#fff';
-      ctx.strokeStyle = '#000';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(x, y, 5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-      ctx.fillStyle = '#fff';
-      ctx.font = 'bold 12px -apple-system, system-ui, sans-serif';
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'middle';
-      ctx.strokeStyle = '#000';
-      ctx.lineWidth = 3;
-      const label = pt.label ?? 'P';
-      ctx.strokeText(label, x + 8, y);
-      ctx.fillText(label, x + 8, y);
+    // P markers — render at any τ-shift that lands inside the window.
+    {
+      const r = this.range;
+      const kLow = Math.floor(r.tauMin);
+      const kHigh = Math.floor(r.tauMax);
+      for (const pt of this.pPoints) {
+        if (pt.v < r.vMin || pt.v > r.vMax) continue;
+        for (let k = kLow; k <= kHigh; k++) {
+          const tauU = pt.tau + k;
+          if (tauU < r.tauMin || tauU > r.tauMax) continue;
+          const x = this.toX(tauU);
+          const y = this.toY(pt.v);
+          ctx.fillStyle = '#fff';
+          ctx.strokeStyle = '#000';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.arc(x, y, 5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = '#fff';
+          ctx.font = 'bold 12px -apple-system, system-ui, sans-serif';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.strokeStyle = '#000';
+          ctx.lineWidth = 3;
+          const label = pt.label ?? 'P';
+          ctx.strokeText(label, x + 8, y);
+          ctx.fillText(label, x + 8, y);
+        }
+      }
     }
 
     // Border + axis labels

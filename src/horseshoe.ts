@@ -44,11 +44,12 @@ function applyShowImage(on: boolean): void {
 
 // Zoom range = sector with 30% margin on each side (clamped to v ≥ 0).
 function updateZoomRange(): void {
-  const dTau = Math.max(1e-6, cfg.tauE - cfg.tauS);
+  const tS = tauStart(), tE = tauEnd();
+  const dTau = Math.max(1e-6, tE - tS);
   const dV = Math.max(1e-6, cfg.vE - cfg.vS);
   const range: ZoomRange = {
-    tauMin: cfg.tauS - 0.3 * dTau,
-    tauMax: cfg.tauE + 0.3 * dTau,
+    tauMin: tS - 0.3 * dTau,
+    tauMax: tE + 0.3 * dTau,
     vMin: Math.max(0, cfg.vS - 0.3 * dV),
     vMax: cfg.vE + 0.3 * dV,
   };
@@ -60,15 +61,21 @@ interface Cfg {
   vMax: number;
   maxPeriods: number;
   n: number;
-  // Sector
-  tauS: number; tauE: number;
+  // Sector: τ window described by central phase + half-width. The
+  // actual edges are tauC ± tauD, which may go outside [0, 1) when the
+  // window straddles the τ = 0 seam — we deliberately keep them as a
+  // continuous representation (e.g. [-0.1, 0.1]) so downstream code
+  // doesn't have to deal with seam wraparound artifacts.
+  tauC: number; tauD: number;
   vS: number; vE: number;
   k: number;
 }
 const cfg: Cfg = {
   e: 0.5, vMax: 3.2, maxPeriods: 5, n: 200,
-  tauS: 0.254, tauE: 0.276, vS: 0.300, vE: 1.848, k: 3800,
+  tauC: 0.265, tauD: 0.011, vS: 0.300, vE: 1.848, k: 3800,
 };
+function tauStart(): number { return cfg.tauC - cfg.tauD; }
+function tauEnd(): number { return cfg.tauC + cfg.tauD; }
 
 let worker: Worker | null = null;
 type Phase = 'idle' | 'grid'
@@ -138,10 +145,10 @@ function boundaryParam(s: number): { tau0: number; v0: number } {
   const edge = Math.floor(sm) % 4;
   const t = sm - edge;
   switch (edge) {
-    case 0: return { tau0: cfg.tauS, v0: cfg.vS + (vUpper - cfg.vS) * t };
-    case 1: return { tau0: cfg.tauS + (cfg.tauE - cfg.tauS) * t, v0: vUpper };
-    case 2: return { tau0: cfg.tauE, v0: vUpper + (cfg.vS - vUpper) * t };
-    default: return { tau0: cfg.tauE + (cfg.tauS - cfg.tauE) * t, v0: cfg.vS };
+    case 0: return { tau0: tauStart(), v0: cfg.vS + (vUpper - cfg.vS) * t };
+    case 1: return { tau0: tauStart() + (tauEnd() - tauStart()) * t, v0: vUpper };
+    case 2: return { tau0: tauEnd(), v0: vUpper + (cfg.vS - vUpper) * t };
+    default: return { tau0: tauEnd() + (tauStart() - tauEnd()) * t, v0: cfg.vS };
   }
 }
 
@@ -277,13 +284,15 @@ bindNumeric('n', 'n-num',
   (v) => { cfg.n = v; invalidateGrid(); });
 
 // Sector geometry only affects the forward image (polygon).
-bindNumeric('taus', 'taus-num',
+// τ window is described as central phase ± half-width so it can straddle
+// the τ=0 seam continuously (e.g. tauC=0, tauD=0.1 → [-0.1, 0.1]).
+bindNumeric('tauc', 'tauc-num',
   { toNum: (v) => v.toFixed(3), clamp: (v) => ((v % 1) + 1) % 1 },
-  (v) => { cfg.tauS = v; invalidatePolygon(); });
+  (v) => { cfg.tauC = v; invalidatePolygon(); });
 
-bindNumeric('taue', 'taue-num',
-  { toNum: (v) => v.toFixed(3), clamp: (v) => ((v % 1) + 1) % 1 },
-  (v) => { cfg.tauE = v; invalidatePolygon(); });
+bindNumeric('taud', 'taud-num',
+  { toNum: (v) => v.toFixed(3), clamp: (v) => Math.max(0, Math.min(0.5, v)) },
+  (v) => { cfg.tauD = v; invalidatePolygon(); });
 
 bindNumeric('vs', 'vs-num',
   { toNum: (v) => v.toFixed(3), clamp: (v) => Math.max(0, v) },
@@ -427,11 +436,11 @@ function runSector(): void {
   const v0s: number[] = [];
   for (let k = 0; k < K; k++) {
     const v = cfg.vS + (cfg.vE - cfg.vS) * (K === 1 ? 0 : k / (K - 1));
-    tau0s.push(cfg.tauS); v0s.push(v);
+    tau0s.push(tauStart()); v0s.push(v);
   }
   for (let k = 0; k < K; k++) {
     const v = cfg.vS + (cfg.vE - cfg.vS) * (K === 1 ? 0 : k / (K - 1));
-    tau0s.push(cfg.tauE); v0s.push(v);
+    tau0s.push(tauEnd()); v0s.push(v);
   }
   const w = ensureWorker();
   w.postMessage({
@@ -476,7 +485,7 @@ function consumeSpiralResults(
     const v0 = cfg.vS + (cfg.vE - cfg.vS) * (k / (K - 1));
     const s = validCount <= 1 ? 0 : k / validCount;
     polygonNodes.push({
-      s, tau0: cfg.tauS, v0,
+      s, tau0: tauStart(), v0,
       tau: tauStars[k], v: vStars[k], escaped: false,
     });
     leftSpiral.push({ tau: tauStars[k], v: vStars[k], escaped: false });
@@ -488,7 +497,7 @@ function consumeSpiralResults(
     const v0 = cfg.vS + (cfg.vE - cfg.vS) * (inputIdx / (K - 1));
     const s = validCount <= 1 ? 2 : 2 + k / validCount;
     polygonNodes.push({
-      s, tau0: cfg.tauE, v0,
+      s, tau0: tauEnd(), v0,
       tau: tauStars[K + inputIdx], v: vStars[K + inputIdx],
       escaped: false,
     });
@@ -508,12 +517,12 @@ function consumeSpiralResults(
   const v0s: number[] = [];
   for (let k = 0; k < Kt; k++) {
     const t = Kt === 1 ? 0.5 : k / (Kt - 1);
-    t0s.push(cfg.tauS + (cfg.tauE - cfg.tauS) * t);
+    t0s.push(tauStart() + (tauEnd() - tauStart()) * t);
     v0s.push(effVE);
   }
   for (let k = 0; k < Kt; k++) {
     const t = Kt === 1 ? 0.5 : k / (Kt - 1);
-    t0s.push(cfg.tauE + (cfg.tauS - cfg.tauE) * t);
+    t0s.push(tauEnd() + (tauStart() - tauEnd()) * t);
     v0s.push(cfg.vS);
   }
   const w = ensureWorker();
@@ -538,7 +547,7 @@ function consumeEdgeResults(
     const s = 1 + k / K; // strictly < 2
     polygonNodes.push({
       s,
-      tau0: cfg.tauS + (cfg.tauE - cfg.tauS) * t, v0: effVE,
+      tau0: tauStart() + (tauEnd() - tauStart()) * t, v0: effVE,
       tau: tauStars[k], v: vStars[k],
       escaped: escapes[k] === 1,
     });
@@ -549,7 +558,7 @@ function consumeEdgeResults(
     const s = 3 + k / K;
     polygonNodes.push({
       s,
-      tau0: cfg.tauE + (cfg.tauS - cfg.tauE) * t, v0: cfg.vS,
+      tau0: tauEnd() + (tauStart() - tauEnd()) * t, v0: cfg.vS,
       tau: tauStars[K + k], v: vStars[K + k],
       escaped: escapes[K + k] === 1,
     });
@@ -718,7 +727,7 @@ function updateSectorDisplay(): void {
   // to it so the blue overlay matches the polygon's effective input range.
   const top = effVE > 0 ? Math.min(effVE, cfg.vE) : cfg.vE;
   const s: SectorRect = {
-    tauS: cfg.tauS, tauE: cfg.tauE, vS: cfg.vS, vE: top,
+    tauS: tauStart(), tauE: tauEnd(), vS: cfg.vS, vE: top,
   };
   applySector(s);
   updateZoomRange();
@@ -754,8 +763,8 @@ cfg.e = parseFloat($<HTMLInputElement>('e').value);
 cfg.vMax = parseFloat($<HTMLInputElement>('vmax').value);
 cfg.maxPeriods = parseInt($<HTMLInputElement>('tmax').value, 10);
 cfg.n = parseInt($<HTMLInputElement>('n').value, 10);
-cfg.tauS = parseFloat($<HTMLInputElement>('taus').value);
-cfg.tauE = parseFloat($<HTMLInputElement>('taue').value);
+cfg.tauC = parseFloat($<HTMLInputElement>('tauc').value);
+cfg.tauD = parseFloat($<HTMLInputElement>('taud').value);
 cfg.vS = parseFloat($<HTMLInputElement>('vs').value);
 cfg.vE = parseFloat($<HTMLInputElement>('ve').value);
 cfg.k = parseInt($<HTMLInputElement>('k').value, 10);
