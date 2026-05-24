@@ -242,37 +242,41 @@ export class HorseshoeZoom {
     }
 
     // Stroke a (τ, v) polyline in the zoom panel.
-    // The polygon's boundary is one continuous loop in (τ*, v*), but a
-    // narrow Cartesian τ window cuts it into many sub-paths (one per
-    // "wind" of the curve through the visible strip). Canvas's evenodd
-    // fill would implicitly close each sub-path with a chord back to its
-    // start, producing many spurious triangular regions. Stroking only
-    // avoids this and shows exactly the outline.
+    // Two stages:
     //
-    // tauMap lets the same routine draw V_k = ρ(U_k) by passing t → -t,
-    // and ∂D₁ = ρ(∂D₀) the same way. closeLoop walks one extra wrap
-    // segment so closed curves render their wrap chord too.
+    //   1) Unwrap each node's τ into a continuous tauU value relative to
+    //      the previous one — a step from τ=0.97 → τ=0.03 becomes
+    //      0.97 → 1.03, so the path stays continuous across the τ=0 seam.
+    //      The unwrap accumulates across windings, so a polygon that
+    //      winds N times has tauU spanning ~N units.
+    //
+    //   2) Render the polyline at every integer τ-shift k such that
+    //      shifting all tauU by k puts at least one node inside the
+    //      visible τ window. This makes EACH winding visible in the
+    //      narrow window (otherwise only the unique tauU values that
+    //      happen to land in the window — typically one winding's worth
+    //      — would appear).
+    //
+    // tauMap lets the same routine draw V_k = ρ(U_k) (t → -t) and
+    // ∂D₁ = ρ(∂D₀). closeLoop walks one extra wrap segment so closed
+    // curves render their wrap chord too.
     const drawPolyline = (
       pts: ReadonlyArray<{ tau: number; v: number; escaped?: boolean }>,
       color: string, lineWidth: number,
       tauMap: (t: number) => number, closeLoop: boolean,
     ): void => {
       if (pts.length < 2) return;
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(p.x, p.y, p.w, p.h);
-      ctx.clip();
-      ctx.strokeStyle = color;
-      ctx.lineWidth = lineWidth;
-      ctx.beginPath();
+      const n = pts.length;
+      const center = 0.5 * (this.range.tauMin + this.range.tauMax);
+      // Stage 1: continuous tauU per node (NaN for breaks).
+      const tauUs: number[] = new Array(n);
       let started = false;
       let prevTauU = 0;
-      const center = 0.5 * (this.range.tauMin + this.range.tauMax);
-      const end = closeLoop ? pts.length + 1 : pts.length;
-      for (let i = 0; i < end; i++) {
-        const pt = pts[i % pts.length];
+      let minTauU = Infinity, maxTauU = -Infinity;
+      for (let i = 0; i < n; i++) {
+        const pt = pts[i];
         if (pt.escaped || !isFinite(pt.tau) || !isFinite(pt.v)) {
-          started = false; continue;
+          tauUs[i] = NaN; started = false; continue;
         }
         const tauRaw = tauMap(pt.tau);
         let tauU: number;
@@ -283,13 +287,38 @@ export class HorseshoeZoom {
         } else {
           tauU = tauRaw - Math.round(tauRaw - center);
         }
-        const x = this.toX(tauU);
-        const y = this.toY(pt.v);
-        if (started) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+        tauUs[i] = tauU;
+        if (tauU < minTauU) minTauU = tauU;
+        if (tauU > maxTauU) maxTauU = tauU;
         prevTauU = tauU;
         started = true;
       }
-      ctx.stroke();
+      if (!isFinite(minTauU)) return;
+      // Stage 2: render at every integer τ-shift overlapping the window.
+      const kLow = Math.ceil(this.range.tauMin - maxTauU);
+      const kHigh = Math.floor(this.range.tauMax - minTauU);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(p.x, p.y, p.w, p.h);
+      ctx.clip();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
+      const end = closeLoop ? n + 1 : n;
+      for (let k = kLow; k <= kHigh; k++) {
+        ctx.beginPath();
+        let drawing = false;
+        for (let i = 0; i < end; i++) {
+          const idx = i % n;
+          const tauU = tauUs[idx];
+          if (!isFinite(tauU)) { drawing = false; continue; }
+          const pt = pts[idx];
+          const x = this.toX(tauU + k);
+          const y = this.toY(pt.v);
+          if (drawing) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+          drawing = true;
+        }
+        ctx.stroke();
+      }
       ctx.restore();
     };
 
