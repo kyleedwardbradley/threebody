@@ -600,11 +600,10 @@ export class HorseshoeCanvas {
       ctx.stroke();
     }
 
-    // Polygon
+    // U_k = φ(R) ∩ R: forward image of the sector. Solid red fill (no
+    // outline) so the polygon reads as a region rather than a curve.
     if (this.polygon && this.polygon.length > 2) {
-      ctx.fillStyle = 'rgba(255, 90, 90, 0.22)';
-      ctx.strokeStyle = 'rgba(255, 130, 130, 0.9)';
-      ctx.lineWidth = lw(1.2);
+      ctx.fillStyle = 'rgb(220, 90, 90)';
       ctx.beginPath();
       let started = false;
       for (const p of this.polygon) {
@@ -622,16 +621,14 @@ export class HorseshoeCanvas {
       }
       ctx.closePath();
       ctx.fill('evenodd');
-      ctx.stroke();
     }
 
-    // V_k = ρ(U_k): reflection of the polygon (U_k) across τ=0. Drawn in
-    // cyan so it's visible alongside the red polygon (U_k). Where the
-    // cyan and the blue sector overlap, you have V_k ∩ R.
+    // V_k = φ⁻¹(R) ∩ R. When R is symmetric (τc = 0 or 0.5), Moser's
+    // Lemma 2 gives V_k = ρ(U_k), so we can render it as the polygon
+    // reflected across τ=0. Drawn in 40% blue so where it crosses U_k
+    // (red) and the sector overlay you can read off V_k ∩ R.
     if (this.polygon && this.showVk && this.polygon.length > 2) {
-      ctx.fillStyle = 'rgba(95, 200, 220, 0.22)';
-      ctx.strokeStyle = 'rgba(140, 220, 235, 0.95)';
-      ctx.lineWidth = lw(1.2);
+      ctx.fillStyle = 'rgba(80, 140, 255, 0.40)';
       ctx.beginPath();
       let started = false;
       for (const p of this.polygon) {
@@ -649,7 +646,6 @@ export class HorseshoeCanvas {
       }
       ctx.closePath();
       ctx.fill('evenodd');
-      ctx.stroke();
     }
 
     // ∂D₀ (yellow) and ∂D₁ (green) boundary curves. ∂D₁ = ρ(∂D₀) where

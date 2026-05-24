@@ -322,14 +322,15 @@ export class HorseshoeZoom {
       ctx.restore();
     };
 
-    // Polygon (U_k = φ(R) ∩ R) outline in red.
+    // Polygon (U_k = φ(R) ∩ R) outline in solid red — matches the polar
+    // canvas's solid red U_k fill colour.
     if (this.polygon && this.polygon.length > 2) {
-      drawPolyline(this.polygon, 'rgba(255, 130, 130, 0.95)', 1.2, (t) => t, false);
+      drawPolyline(this.polygon, 'rgb(220, 90, 90)', 1.2, (t) => t, false);
     }
 
-    // V_k = ρ(U_k): reflection of the polygon across τ=0. Cyan.
+    // V_k = ρ(U_k): reflection of the polygon across τ=0, blue.
     if (this.polygon && this.showVk && this.polygon.length > 2) {
-      drawPolyline(this.polygon, 'rgba(140, 220, 235, 0.95)', 1.2, (t) => -t, false);
+      drawPolyline(this.polygon, 'rgba(80, 140, 255, 0.85)', 1.2, (t) => -t, false);
     }
 
     // ∂D₀ (yellow) and ∂D₁ = ρ(∂D₀) (green) boundary curves.
