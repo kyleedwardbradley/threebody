@@ -19,6 +19,9 @@ function applySector(s: SectorRect | null): void {
 function applyPolygon(pts: PolygonPoint[] | null): void {
   canvas.setPolygon(pts); zoom.setPolygon(pts);
 }
+function applyVkPolygon(pts: PolygonPoint[] | null): void {
+  canvas.setVkPolygon(pts); zoom.setVkPolygon(pts);
+}
 function applySpiralPair(left: PolygonPoint[] | null, right: PolygonPoint[] | null): void {
   canvas.setSpiralPair(left, right); zoom.setSpiralPair(left, right);
 }
@@ -87,7 +90,9 @@ type Phase = 'idle' | 'grid'
   | 'finding-p'        // bisecting on the symmetry-line v_esc
   | 'sector-spirals'   // shooting the two τ-spirals at matched v
   | 'sector-edges'     // shooting top + bottom connectors at the effective vE
-  | 'sector-refining'  // priority-queue refinement on the closed boundary
+  | 'sector-refining'  // round-based refinement on the closed boundary
+  | 'vk-spirals'       // V_k: shoot reflected sector's two τ-spirals via φ
+  | 'vk-edges'         // V_k: shoot reflected sector's top + bottom connectors
   | 'boundary-initial' // initial K-sample ∂D₀ bisection
   | 'boundary-refining'; // adaptive refinement of ∂D₀ at screen scale
 let phase: Phase = 'idle';
@@ -137,6 +142,14 @@ interface PendingGap {
 }
 
 const polygonNodes: PolygonNode[] = [];   // sorted by s in [0, 4)
+// V_k polygon — populated by runVk(). For τc-symmetric sectors this is
+// the mirror of polygonNodes (τ → -τ). For other τc it's built from a
+// separate forward-φ shoot of the reflected sector with the τ-images
+// negated back (Moser's Lemma 2: φ⁻¹ = ρ φ ρ).
+const vkPolygonNodes: PolygonNode[] = [];
+let vkSpiralK = 0;
+let vkEdgeKtau = 0;
+let vkEffVE = 0;
 const heap: Gap[] = [];                   // max-heap on dist
 let pending: PendingGap[] = [];
 // Refine one gap per round-trip so we strictly process the longest
@@ -361,27 +374,29 @@ $('toggle-boundaries').addEventListener('click', () => {
   zoom.setShowBoundaries(next);
   $('toggle-boundaries').textContent = next ? 'Hide boundaries' : 'Show boundaries';
 });
+$('run-vk').addEventListener('click', () => runVk());
 $('toggle-vk').addEventListener('click', () => {
-  if (!isSectorSymmetric()) return;
+  if (vkPolygonNodes.length === 0) return;
   const next = !canvas.getShowVk();
   canvas.setShowVk(next);
   zoom.setShowVk(next);
   $('toggle-vk').textContent = next ? 'Hide V_k' : 'Show V_k';
 });
 
-// V_k = ρ(U_k) only holds when R is symmetric (centred on a symmetry line,
-// τc = 0 here = mutual apogee, P_a). Disable the toggle when it's not.
+// True when R is centred on one of the two symmetry lines (τc = 0 =
+// mutual apogee P_a, or τc = 0.5 = mutual perihelion P_b). Then ρ(R) = R
+// and V_k = ρ(U_k) follows from Moser's Lemma 2 — no separate shoot.
 function isSectorSymmetric(): boolean {
-  return Math.abs(cfg.tauC) < 1e-6;
+  const t = ((cfg.tauC % 1) + 1) % 1;
+  return Math.abs(t) < 1e-6 || Math.abs(t - 0.5) < 1e-6;
 }
 function updateVkButton(): void {
   const btn = $<HTMLButtonElement>('toggle-vk');
-  const sym = isSectorSymmetric();
-  btn.disabled = !sym;
-  btn.title = sym
-    ? 'V_k = ρ(U_k) — reflection of the sector image'
-    : 'V_k = ρ(U_k) only when τc = 0 (sector centred on P)';
-  if (!sym && canvas.getShowVk()) {
+  btn.disabled = vkPolygonNodes.length === 0;
+  btn.title = btn.disabled
+    ? 'Click "Compute V_k" first'
+    : 'Toggle V_k = φ⁻¹(R) ∩ R overlay';
+  if (btn.disabled && canvas.getShowVk()) {
     canvas.setShowVk(false);
     zoom.setShowVk(false);
     btn.textContent = 'Show V_k';
@@ -471,19 +486,25 @@ function killWorker(): void {
 
 function invalidatePolygon(): void {
   const hadPolygon = polygonNodes.length > 0;
-  if (worker && (phase === 'sector-spirals' || phase === 'sector-edges' || phase === 'sector-refining')) {
+  if (worker && (phase === 'sector-spirals' || phase === 'sector-edges'
+              || phase === 'sector-refining' || phase === 'vk-spirals'
+              || phase === 'vk-edges')) {
     worker.postMessage({ type: 'stop' } as HorseshoeMainToWorker);
     killWorker();
     phase = 'idle';
   }
   polygonNodes.length = 0;
+  vkPolygonNodes.length = 0;
   heap.length = 0;
   pending = [];
   effVE = 0;
+  vkEffVE = 0;
   applyPolygon(null);
+  applyVkPolygon(null);
   applySpiralPair(null, null);
   updateSectorDisplay();
   updateRefineButton();
+  updateVkButton();
   if (hadPolygon) $('status').textContent = 'sector image cleared (parameters changed)';
 }
 
@@ -510,7 +531,9 @@ function invalidateAll(): void {
 }
 
 function stopAll(): void {
-  const wasSector = phase === 'sector-spirals' || phase === 'sector-edges' || phase === 'sector-refining';
+  const wasSector = phase === 'sector-spirals' || phase === 'sector-edges'
+                 || phase === 'sector-refining' || phase === 'vk-spirals'
+                 || phase === 'vk-edges';
   // finding-p just falls through to idle below
   if (worker) {
     const m: HorseshoeMainToWorker = { type: 'stop' };
@@ -708,6 +731,187 @@ function consumeEdgeResults(
   const nEsc = polygonNodes.reduce((s, n) => s + (n.escaped ? 1 : 0), 0);
   $('status').textContent =
     `sector image: N=${polygonNodes.length}${nEsc ? `, ${nEsc} escaped` : ''} — click Refine to subdivide`;
+}
+
+// ---------- V_k = φ⁻¹(R) ∩ R ---------------------------------------------
+//
+// Moser's Lemma 2: φ⁻¹ = ρ φ ρ where ρ(τ, v) = (-τ, v). So the V_k
+// polygon (image of R's boundary under φ⁻¹) is built by:
+//
+//   1) Reflect each boundary point: (τ, v) → (-τ, v).
+//   2) Shoot through the forward Poincaré map φ.
+//   3) Reflect the result: (τ*, v*) → (-τ*, v*).
+//
+// When R is symmetric (τc=0 or 0.5), ρ(R) = R as a SET, so the input
+// shots are at the same physical (τ0, v0) values as the U_k shots —
+// just paired differently across the boundary. Easiest path: take the
+// existing polygonNodes and negate τ on each, no shooting needed.
+//
+// For asymmetric R, the reflected sector boundary sits at -τC instead
+// of τC, so we run a parallel shoot batch (spirals then top/bottom)
+// just like runSector, with each input τ0 negated and each output τ*
+// negated back before storage.
+
+function applyVk(): void {
+  applyVkPolygon(vkPolygonNodes.length > 0
+    ? vkPolygonNodes.map((n) => ({ tau: n.tau, v: n.v, escaped: n.escaped }))
+    : null);
+}
+
+function runVk(): void {
+  if (phase !== 'idle') return;
+  if (polygonNodes.length === 0) {
+    $('status').textContent = 'compute the sector image first, then V_k';
+    return;
+  }
+
+  if (isSectorSymmetric()) {
+    // Fast path: V_k = ρ(U_k). Copy polygonNodes with τ negated.
+    vkPolygonNodes.length = 0;
+    for (const n of polygonNodes) {
+      vkPolygonNodes.push({
+        s: n.s, tau0: -n.tau0, v0: n.v0,
+        tau: -n.tau, v: n.v, escaped: n.escaped,
+      });
+    }
+    applyVk();
+    updateVkButton();
+    $('status').textContent =
+      `V_k = ρ(U_k) (symmetric sector): N=${vkPolygonNodes.length}`;
+    return;
+  }
+
+  // Asymmetric: shoot the reflected sector through φ.
+  vkPolygonNodes.length = 0;
+  applyVk();
+  const K = Math.max(4, Math.round(cfg.k));
+  vkSpiralK = K;
+  // Inputs: reflected τ0, original v0. ρ(tauStart) = -tauStart = +tauD,
+  // ρ(tauEnd) = -tauEnd = -tauD (for τc=0); in general, ρ(τc±τd) = -τc∓τd.
+  const tau0s: number[] = [];
+  const v0s: number[] = [];
+  const tauStartR = -tauStart();
+  const tauEndR = -tauEnd();
+  for (let k = 0; k < K; k++) {
+    const v = cfg.vS + (cfg.vE - cfg.vS) * (K === 1 ? 0 : k / (K - 1));
+    tau0s.push(tauStartR); v0s.push(v);
+  }
+  for (let k = 0; k < K; k++) {
+    const v = cfg.vS + (cfg.vE - cfg.vS) * (K === 1 ? 0 : k / (K - 1));
+    tau0s.push(tauEndR); v0s.push(v);
+  }
+  const w = ensureWorker();
+  w.postMessage({
+    type: 'shoot',
+    req: { e: cfg.e, maxPeriods: cfg.maxPeriods, tau0s, v0s },
+  });
+  phase = 'vk-spirals';
+  $('status').textContent = `V_k: shooting ρ(R) spirals… ${2 * K} shots`;
+}
+
+// Wrap (-tau*) into [0, 1) so the rendered angle is in the standard
+// τ-window the rest of the code uses.
+function wrap1(t: number): number { return ((t % 1) + 1) % 1; }
+
+function consumeVkSpiralResults(
+  tauStars: Float32Array, vStars: Float32Array, escapes: Uint8Array,
+): void {
+  const K = vkSpiralK;
+  let escIdx = K;
+  for (let k = 0; k < K; k++) {
+    if (escapes[k] === 1 || escapes[K + k] === 1) { escIdx = k; break; }
+  }
+  if (escIdx === 0) {
+    phase = 'idle'; killWorker();
+    $('status').textContent = 'V_k: every spiral sample escaped — try a smaller sector';
+    return;
+  }
+  const validCount = escIdx;
+  vkEffVE = (K === 1)
+    ? cfg.vS
+    : cfg.vS + (cfg.vE - cfg.vS) * (validCount - 1) / (K - 1);
+  // Build the two V_k spiral edges. Stored (τ, v) gets ρ applied to τ.
+  // The polygon's s parameterisation walks the REFLECTED rectangle CCW
+  // in (-τ0, v0) space, but since we negate τ outputs the visible curve
+  // ends up CW in (τ, v) space — that's still a valid closed polygon.
+  vkPolygonNodes.length = 0;
+  const tauStartR = -tauStart();
+  const tauEndR = -tauEnd();
+  for (let k = 0; k < validCount; k++) {
+    const v0 = cfg.vS + (cfg.vE - cfg.vS) * (k / (K - 1));
+    const s = validCount <= 1 ? 0 : k / (validCount - 1);
+    const tau = wrap1(-tauStars[k]);
+    vkPolygonNodes.push({
+      s, tau0: tauStartR, v0,
+      tau, v: vStars[k], escaped: false,
+    });
+  }
+  for (let k = 0; k < validCount; k++) {
+    const inputIdx = validCount - 1 - k;
+    const v0 = cfg.vS + (cfg.vE - cfg.vS) * (inputIdx / (K - 1));
+    const s = validCount <= 1 ? 2 : 2 + k / (validCount - 1);
+    const tau = wrap1(-tauStars[K + inputIdx]);
+    vkPolygonNodes.push({
+      s, tau0: tauEndR, v0,
+      tau, v: vStars[K + inputIdx], escaped: false,
+    });
+  }
+
+  // Shoot top/bottom connectors of the reflected sector.
+  vkEdgeKtau = K;
+  const t0s: number[] = [];
+  const v0s: number[] = [];
+  for (let k = 0; k < K; k++) {
+    const t = K === 1 ? 0.5 : k / (K - 1);
+    t0s.push(tauStartR + (tauEndR - tauStartR) * t);
+    v0s.push(vkEffVE);
+  }
+  for (let k = 0; k < K; k++) {
+    const t = K === 1 ? 0.5 : k / (K - 1);
+    t0s.push(tauEndR + (tauStartR - tauEndR) * t);
+    v0s.push(cfg.vS);
+  }
+  worker!.postMessage({
+    type: 'shoot',
+    req: { e: cfg.e, maxPeriods: cfg.maxPeriods, tau0s: t0s, v0s },
+  });
+  phase = 'vk-edges';
+  $('status').textContent = `V_k: shooting ρ(R) top/bottom edges… ${2 * K} shots`;
+}
+
+function consumeVkEdgeResults(
+  tauStars: Float32Array, vStars: Float32Array, escapes: Uint8Array,
+): void {
+  const K = vkEdgeKtau;
+  const tauStartR = -tauStart();
+  const tauEndR = -tauEnd();
+  // Top edge (s ∈ [1, 2]) and bottom (s ∈ [3, 4]).
+  for (let k = 0; k < K; k++) {
+    const t = K === 1 ? 0.5 : k / (K - 1);
+    const s = K === 1 ? 1.5 : 1 + k / (K - 1);
+    const tau = wrap1(-tauStars[k]);
+    vkPolygonNodes.push({
+      s,
+      tau0: tauStartR + (tauEndR - tauStartR) * t, v0: vkEffVE,
+      tau, v: vStars[k], escaped: escapes[k] === 1,
+    });
+  }
+  for (let k = 0; k < K; k++) {
+    const t = K === 1 ? 0.5 : k / (K - 1);
+    const s = K === 1 ? 3.5 : 3 + k / (K - 1);
+    const tau = wrap1(-tauStars[K + k]);
+    vkPolygonNodes.push({
+      s,
+      tau0: tauEndR + (tauStartR - tauEndR) * t, v0: cfg.vS,
+      tau, v: vStars[K + k], escaped: escapes[K + k] === 1,
+    });
+  }
+  vkPolygonNodes.sort((a, b) => a.s - b.s);
+  applyVk();
+  updateVkButton();
+  phase = 'idle';
+  killWorker();
+  $('status').textContent = `V_k done. N=${vkPolygonNodes.length}`;
 }
 
 // ---------- Refinement: round-based iteration over all segments -----------
@@ -1013,6 +1217,10 @@ function onWorkerMsg(ev: MessageEvent<HorseshoeWorkerToMain>): void {
         consumeEdgeResults(tauStars, vStars, escapes);
       } else if (phase === 'sector-refining') {
         consumeRefineResults(tauStars, vStars, escapes);
+      } else if (phase === 'vk-spirals') {
+        consumeVkSpiralResults(tauStars, vStars, escapes);
+      } else if (phase === 'vk-edges') {
+        consumeVkEdgeResults(tauStars, vStars, escapes);
       }
       break;
     }

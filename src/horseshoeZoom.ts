@@ -28,6 +28,7 @@ export class HorseshoeZoom {
   private pPoints: { tau: number; v: number; label?: string }[] = [];
   private boundaryD0: { tau: number; v: number }[] | null = null;
   private showBoundaries = true;
+  private vkPolygon: PolygonPoint[] | null = null;
   private showVk = false;
   private showGrid = true;
   private showImage = false;
@@ -88,6 +89,7 @@ export class HorseshoeZoom {
   }
   setShowBoundaries(on: boolean): void { this.showBoundaries = on; this.draw(); }
   setShowVk(on: boolean): void { this.showVk = on; this.draw(); }
+  setVkPolygon(pts: PolygonPoint[] | null): void { this.vkPolygon = pts; this.draw(); }
   setColorRange(lo: number, hi: number): void {
     if (!isFinite(lo) || !isFinite(hi) || hi <= lo) return;
     this.colorRange = { lo, hi };
@@ -328,9 +330,10 @@ export class HorseshoeZoom {
       drawPolyline(this.polygon, 'rgb(220, 90, 90)', 1.2, (t) => t, false);
     }
 
-    // V_k = ρ(U_k): reflection of the polygon across τ=0, blue.
-    if (this.polygon && this.showVk && this.polygon.length > 2) {
-      drawPolyline(this.polygon, 'rgba(80, 140, 255, 0.85)', 1.2, (t) => -t, false);
+    // V_k = φ⁻¹(R) ∩ R. Stored as its own polygon (vkPolygon) by
+    // horseshoe.ts; drawn in blue.
+    if (this.vkPolygon && this.showVk && this.vkPolygon.length > 2) {
+      drawPolyline(this.vkPolygon, 'rgba(80, 140, 255, 0.85)', 1.2, (t) => t, false);
     }
 
     // ∂D₀ (yellow) and ∂D₁ = ρ(∂D₀) (green) boundary curves.

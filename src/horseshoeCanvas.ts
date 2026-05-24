@@ -67,9 +67,12 @@ export class HorseshoeCanvas {
   // the reflection (τ, v) → (-τ mod 1, v) per Moser's Lemma 2.
   private boundaryD0: { tau: number; v: number }[] | null = null;
   private showBoundaries = true;
-  // V_k = φ⁻¹(R) ∩ R. By Moser's Lemma 2, when R is centred on a
-  // symmetry line, V_k = ρ(U_k) — the reflection of the polygon (U_k =
-  // φ(R) ∩ R) across τ=0. Toggled with showVk.
+  // V_k = φ⁻¹(R) ∩ R. Stored as its own polygon (in same s-order /
+  // (τ, v) format as U_k). Populated by horseshoe.ts runVk() — either by
+  // mirroring the U_k polygon (when R is symmetric about τc=0 or 0.5)
+  // or by shooting the reflected sector through φ and reflecting back.
+  // Toggled with showVk; nothing is drawn unless vkPolygon is non-null.
+  private vkPolygon: PolygonPoint[] | null = null;
   private showVk = false;
   private showGrid = true;
   private showImage = false;
@@ -240,6 +243,8 @@ export class HorseshoeCanvas {
   setShowBoundaries(on: boolean): void { this.showBoundaries = on; this.draw(); }
   getShowBoundaries(): boolean { return this.showBoundaries; }
   setShowVk(on: boolean): void { this.showVk = on; this.draw(); }
+  setVkPolygon(pts: PolygonPoint[] | null): void { this.vkPolygon = pts; this.draw(); }
+  hasVkPolygon(): boolean { return this.vkPolygon !== null; }
   getShowVk(): boolean { return this.showVk; }
   setVMax(v: number): void {
     if (!isFinite(v) || v <= 0) return;
@@ -623,22 +628,23 @@ export class HorseshoeCanvas {
       ctx.fill('evenodd');
     }
 
-    // V_k = φ⁻¹(R) ∩ R. When R is symmetric (τc = 0 or 0.5), Moser's
-    // Lemma 2 gives V_k = ρ(U_k), so we can render it as the polygon
-    // reflected across τ=0. Drawn in 40% blue so where it crosses U_k
-    // (red) and the sector overlay you can read off V_k ∩ R.
-    if (this.polygon && this.showVk && this.polygon.length > 2) {
+    // V_k = φ⁻¹(R) ∩ R. Drawn from the vkPolygon snapshot populated by
+    // runVk() in horseshoe.ts — either ρ(U_k) for τc-symmetric sectors
+    // or a separate shoot of the reflected sector. Solid 40% blue fill
+    // so where it crosses U_k (red) and the sector overlay you can read
+    // off V_k ∩ R.
+    if (this.vkPolygon && this.showVk && this.vkPolygon.length > 2) {
       ctx.fillStyle = 'rgba(80, 140, 255, 0.40)';
       ctx.beginPath();
       let started = false;
-      for (const p of this.polygon) {
+      for (const p of this.vkPolygon) {
         if (p.escaped || !isFinite(p.tau) || !isFinite(p.v)) {
           started = false; continue;
         }
         if (!vIn(p.v)) { started = false; continue; }
         const rad = radiusOf(p.v);
         if (rad < 0 || rad > R) { started = false; continue; }
-        const a = angleOf(unwrap(-p.tau));
+        const a = angleOf(unwrap(p.tau));
         const x = cx + rad * Math.cos(a);
         const y = cy + rad * Math.sin(a);
         if (started) ctx.lineTo(x, y); else ctx.moveTo(x, y);
