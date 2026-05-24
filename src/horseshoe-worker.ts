@@ -31,15 +31,20 @@ function shoot(tau0: number, v0: number, e: number, maxPeriods: number): ShotRes
   return { tau: NaN, v: NaN, escaped: true };
 }
 
-async function gridScan(e: number, maxPeriods: number, n: number, vMax: number): Promise<void> {
+async function gridScan(
+  e: number, maxPeriods: number, n: number,
+  tauMin: number, tauMax: number, vMin: number, vMax: number,
+): Promise<void> {
   let lastYield = performance.now();
+  const tauSpan = tauMax - tauMin;
+  const vSpan = vMax - vMin;
   for (let j = 0; j < n; j++) {
     if (!running) break;
-    const v0 = ((j + 0.5) / n) * vMax;
+    const v0 = vMin + ((j + 0.5) / n) * vSpan;
     const tauStars = new Float32Array(n);
     const vStars = new Float32Array(n);
     for (let i = 0; i < n; i++) {
-      const tau0 = (i + 0.5) / n;
+      const tau0 = tauMin + ((i + 0.5) / n) * tauSpan;
       const r = shoot(tau0, v0, e, maxPeriods);
       tauStars[i] = r.escaped ? NaN : r.tau;
       vStars[i] = r.escaped ? NaN : r.v;
@@ -118,7 +123,8 @@ self.onmessage = (ev: MessageEvent<HorseshoeMainToWorker>) => {
     case 'gridScan':
       if (running) return;
       running = true;
-      gridScan(m.req.e, m.req.maxPeriods, m.req.n, m.req.vMax);
+      gridScan(m.req.e, m.req.maxPeriods, m.req.n,
+        m.req.tauMin, m.req.tauMax, m.req.vMin, m.req.vMax);
       break;
     case 'shoot':
       if (running) return;

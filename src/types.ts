@@ -85,8 +85,11 @@ export type RadiusSource = 'v0' | 'vStar';
 export interface HorseshoeGridRequest {
   e: number;
   maxPeriods: number;
-  n: number;           // grid is n × n (n τ₀ values × n v₀ values)
-  vMax: number;        // top of v₀ range; v₀ ∈ (0, vMax]
+  n: number;           // grid is n × n cells
+  // Scan rectangle in (τ, v) coords. τ may extend outside [0, 1) when
+  // the scan straddles the seam (continuous unwrapped representation).
+  tauMin: number; tauMax: number;
+  vMin: number;   vMax: number;
 }
 
 export interface HorseshoeShootRequest {

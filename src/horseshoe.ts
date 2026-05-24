@@ -25,8 +25,13 @@ function applySpiralPair(left: PolygonPoint[] | null, right: PolygonPoint[] | nu
 function applyPPoints(pts: { tau: number; v: number; label?: string }[]): void {
   canvas.setPPoints(pts); zoom.setPPoints(pts);
 }
-function applyBeginGrid(n: number, vMax: number): void {
-  canvas.beginGrid(n, vMax); zoom.beginGrid(n, vMax);
+function applyBeginGrid(
+  n: number,
+  tauMin: number, tauMax: number,
+  vMin: number, vMax: number,
+): void {
+  canvas.beginGrid(n, tauMin, tauMax, vMin, vMax);
+  zoom.beginGrid(n, tauMin, tauMax, vMin, vMax);
 }
 function applyGridRow(row: number, tauStars: Float32Array, vStars: Float32Array): void {
   canvas.setGridRow(row, tauStars, vStars);
@@ -452,15 +457,22 @@ function stopAll(): void {
 
 function runGrid(): void {
   if (phase !== 'idle') return;
-  applyBeginGrid(cfg.n, cfg.vMax);
+  // Scan only the (τ, v) range visible in the current viewport, subdivided
+  // at the requested resolution N. With no zoom this is the full disc.
+  const b = canvas.getViewportPolarBounds();
+  applyBeginGrid(cfg.n, b.tauMin, b.tauMax, b.vMin, b.vMax);
   const w = ensureWorker();
   const m: HorseshoeMainToWorker = {
     type: 'gridScan',
-    req: { e: cfg.e, maxPeriods: cfg.maxPeriods, n: cfg.n, vMax: cfg.vMax },
+    req: {
+      e: cfg.e, maxPeriods: cfg.maxPeriods, n: cfg.n,
+      tauMin: b.tauMin, tauMax: b.tauMax, vMin: b.vMin, vMax: b.vMax,
+    },
   };
   w.postMessage(m);
   phase = 'grid';
-  $('status').textContent = `grid… 0 / ${cfg.n}`;
+  $('status').textContent =
+    `grid… 0 / ${cfg.n}  (τ∈[${b.tauMin.toFixed(3)}, ${b.tauMax.toFixed(3)}], v∈[${b.vMin.toFixed(3)}, ${b.vMax.toFixed(3)}])`;
 }
 
 function runSector(): void {

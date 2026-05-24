@@ -45,6 +45,11 @@ export class HorseshoeCanvas {
   // user later adjusts the display vMax slider. The two are kept separate
   // so the heatmap data stays anchored to its real v values.
   private vMax = 1;
+  // Scan rectangle: the (τ, v) bounds the grid data was computed over.
+  // May be a subset of the full disc when the user zooms in before scanning.
+  private scanTauMin = 0;
+  private scanTauMax = 1;
+  private scanVMin = 0;
   private scanVMax = 1;
   // tauStars[j*n+i] = τ* at (i,j) cell; vStars[j*n+i] = |v*|. NaN = escape.
   private tauStars: Float32Array | null = null;
@@ -170,9 +175,15 @@ export class HorseshoeCanvas {
 
   // ----- grid -----
 
-  beginGrid(n: number, vMax: number): void {
+  beginGrid(
+    n: number,
+    tauMin: number, tauMax: number,
+    vMin: number,   vMax: number,
+  ): void {
     this.n = n;
-    this.vMax = vMax;
+    this.scanTauMin = tauMin;
+    this.scanTauMax = tauMax;
+    this.scanVMin = vMin;
     this.scanVMax = vMax;
     this.tauStars = new Float32Array(n * n);
     this.vStars = new Float32Array(n * n);
@@ -223,6 +234,68 @@ export class HorseshoeCanvas {
   hasGrid(): boolean { return this.tauStars !== null; }
   setShowImage(on: boolean): void { this.showImage = on; this.draw(); }
   getShowImage(): boolean { return this.showImage; }
+
+  // Polar bounds of the currently visible viewport (for partial grid scans).
+  // Returns the (τ, v) rectangle that covers everything visible in the
+  // current viewRect; if no zoom, covers the full disc.
+  getViewportPolarBounds(): { tauMin: number; tauMax: number; vMin: number; vMax: number } {
+    const w = this.canvas.clientWidth;
+    const h = this.canvas.clientHeight;
+    const cx = w / 2, cy = h / 2;
+    const R = Math.max(0, Math.min(w, h) / 2 - 28);
+    const vMaxFull = this.vMax;
+    if (R <= 0 || !this.viewRect) {
+      return { tauMin: 0, tauMax: 1, vMin: 0, vMax: vMaxFull };
+    }
+    const vr = this.viewRect;
+    const taus: number[] = [];
+    const vs: number[] = [];
+    const sample = (px: number, py: number) => {
+      const dx = px - cx, dy = py - cy;
+      const rad = Math.hypot(dx, dy);
+      if (rad > R) return;
+      const v = (rad / R) * vMaxFull;
+      const ang = Math.atan2(dy, dx) + Math.PI / 2;
+      let tau = ang / (2 * Math.PI);
+      tau = tau - Math.floor(tau);
+      taus.push(tau);
+      vs.push(v);
+    };
+    // Sample along all four viewport edges.
+    const N = 100;
+    for (let i = 0; i <= N; i++) {
+      const t = i / N;
+      sample(vr.x + t * vr.w, vr.y);
+      sample(vr.x + t * vr.w, vr.y + vr.h);
+      sample(vr.x, vr.y + t * vr.h);
+      sample(vr.x + vr.w, vr.y + t * vr.h);
+    }
+    const containsCenter = cx >= vr.x && cx <= vr.x + vr.w &&
+                           cy >= vr.y && cy <= vr.y + vr.h;
+    if (taus.length === 0 && !containsCenter) {
+      return { tauMin: 0, tauMax: 1, vMin: 0, vMax: vMaxFull };
+    }
+    let tauMin: number, tauMax: number, vMin: number;
+    if (containsCenter) {
+      tauMin = 0; tauMax = 1; vMin = 0;
+    } else {
+      const b = cyclicTauBounds(taus);
+      tauMin = b.min; tauMax = b.max;
+      vMin = Math.min(...vs);
+    }
+    // If a viewport corner pokes outside the disc, the disc-edge crosses
+    // the viewport — include the full disc edge (vMaxFull) as max v.
+    const corners: Array<[number, number]> = [
+      [vr.x, vr.y], [vr.x + vr.w, vr.y],
+      [vr.x, vr.y + vr.h], [vr.x + vr.w, vr.y + vr.h],
+    ];
+    let anyOutside = false;
+    for (const [px, py] of corners) {
+      if (Math.hypot(px - cx, py - cy) > R) { anyOutside = true; break; }
+    }
+    const vMax = anyOutside ? vMaxFull : Math.max(...vs);
+    return { tauMin, tauMax, vMin, vMax };
+  }
 
   // Geometry for screen-space gap measurement in the refinement loop.
   getDiscGeometry(): { cx: number; cy: number; R: number; vMax: number } {
@@ -313,10 +386,14 @@ export class HorseshoeCanvas {
 
     const n = this.n;
     const displayVMax = this.vMax;
-    const scanVMax = this.scanVMax;
-    // Per-pixel sampling at NATURAL canvas coords. Viewport zoom is
-    // applied later by the canvas transform; we don't have to know
-    // about it here.
+    const stMin = this.scanTauMin;
+    const stMax = this.scanTauMax;
+    const svMin = this.scanVMin;
+    const svMax = this.scanVMax;
+    const tSpan = stMax - stMin;
+    const vSpan = svMax - svMin;
+    // Per-pixel sampling at NATURAL canvas coords. A pixel only contributes
+    // if its (τ, v) lands in the stored scan rectangle.
     const imageData = ctx.createImageData(wi, hi);
     const data = imageData.data;
     for (let py = 0; py < hi; py++) {
@@ -326,12 +403,16 @@ export class HorseshoeCanvas {
         const rad = Math.hypot(dx, dy);
         if (rad > R) continue;
         const vDisplay = (rad / R) * displayVMax;
-        if (vDisplay > scanVMax) continue;
+        if (vDisplay < svMin || vDisplay > svMax) continue;
         const ang = Math.atan2(dy, dx) + Math.PI / 2;
         let tau = ang / (2 * Math.PI);
         tau = tau - Math.floor(tau);
-        const i = Math.min(n - 1, Math.max(0, Math.floor(tau * n)));
-        const j = Math.min(n - 1, Math.max(0, Math.floor((vDisplay / scanVMax) * n)));
+        // Unwrap τ to the closest representative in the scan range.
+        const k = Math.round(((stMin + stMax) / 2 - tau));
+        const tauU = tau + k;
+        if (tauU < stMin || tauU > stMax) continue;
+        const i = Math.min(n - 1, Math.max(0, Math.floor(((tauU - stMin) / tSpan) * n)));
+        const j = Math.min(n - 1, Math.max(0, Math.floor(((vDisplay - svMin) / vSpan) * n)));
         const ts = this.tauStars[j * n + i];
         if (isNaN(ts)) continue;
         const [r, g, b] = cyclicColor(ts);
@@ -425,7 +506,7 @@ export class HorseshoeCanvas {
           const ang = angleOf(tu);
           const x = cx + rad * Math.cos(ang);
           const y = cy + rad * Math.sin(ang);
-          const tau0 = (i + 0.5) / n;
+          const tau0 = this.scanTauMin + ((i + 0.5) / n) * (this.scanTauMax - this.scanTauMin);
           const [r0, g0, b0] = cyclicColor(tau0);
           ctx.fillStyle = `rgba(${r0},${g0},${b0},0.55)`;
           ctx.beginPath();

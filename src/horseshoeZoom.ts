@@ -15,6 +15,9 @@ export class HorseshoeZoom {
   private ctx: CanvasRenderingContext2D;
 
   private n = 0;
+  private scanTauMin = 0;
+  private scanTauMax = 1;
+  private scanVMin = 0;
   private scanVMax = 1;
   private tauStars: Float32Array | null = null;
   private vStars: Float32Array | null = null;
@@ -37,8 +40,15 @@ export class HorseshoeZoom {
     new ResizeObserver(() => this.resize()).observe(canvas);
   }
 
-  beginGrid(n: number, vMax: number): void {
+  beginGrid(
+    n: number,
+    tauMin: number, tauMax: number,
+    vMin: number,   vMax: number,
+  ): void {
     this.n = n;
+    this.scanTauMin = tauMin;
+    this.scanTauMax = tauMax;
+    this.scanVMin = vMin;
     this.scanVMax = vMax;
     this.tauStars = new Float32Array(n * n);
     this.vStars = new Float32Array(n * n);
@@ -137,26 +147,28 @@ export class HorseshoeZoom {
     // that overlap the visible window and render each cell once per shift.
     if (this.showGrid && this.tauStars && this.n > 0) {
       const n = this.n;
-      const cellTau = 1 / n;
-      const cellV = this.scanVMax / n;
+      const stMin = this.scanTauMin, stMax = this.scanTauMax;
+      const svMin = this.scanVMin,   svMax = this.scanVMax;
+      const cellTau = (stMax - stMin) / n;
+      const cellV   = (svMax - svMin) / n;
       const r = this.range;
-      const j0 = Math.max(0, Math.floor(r.vMin / cellV));
-      const j1 = Math.min(n, Math.ceil(r.vMax / cellV) + 1);
-      const kLow = Math.floor(r.tauMin);
-      const kHigh = Math.floor(r.tauMax);
+      const j0 = Math.max(0, Math.floor((r.vMin - svMin) / cellV));
+      const j1 = Math.min(n, Math.ceil((r.vMax - svMin) / cellV) + 1);
+      // Cell i covers τ ∈ [stMin + i*cellTau + k, stMin + (i+1)*cellTau + k] for shift k.
+      const kLow = Math.floor(r.tauMin - stMax);
+      const kHigh = Math.floor(r.tauMax - stMin);
       for (let k = kLow; k <= kHigh; k++) {
-        const localMin = r.tauMin - k;
-        const localMax = r.tauMax - k;
-        const i0 = Math.max(0, Math.floor(localMin / cellTau));
-        const i1 = Math.min(n, Math.ceil(localMax / cellTau) + 1);
         for (let j = j0; j < j1; j++) {
-          for (let i = i0; i < i1; i++) {
+          for (let i = 0; i < n; i++) {
             const ts = this.tauStars[j * n + i];
             if (isNaN(ts)) continue;
-            const x0 = this.toX(i * cellTau + k);
-            const x1 = this.toX((i + 1) * cellTau + k);
-            const y0 = this.toY((j + 1) * cellV);
-            const y1 = this.toY(j * cellV);
+            const cellLow = stMin + i * cellTau + k;
+            const cellHigh = stMin + (i + 1) * cellTau + k;
+            if (cellHigh < r.tauMin || cellLow > r.tauMax) continue;
+            const x0 = this.toX(cellLow);
+            const x1 = this.toX(cellHigh);
+            const y0 = this.toY(svMin + (j + 1) * cellV);
+            const y1 = this.toY(svMin + j * cellV);
             const xMin = Math.max(p.x, Math.min(x0, x1));
             const xMax = Math.min(p.x + p.w, Math.max(x0, x1));
             const yMin = Math.max(p.y, Math.min(y0, y1));
@@ -189,7 +201,7 @@ export class HorseshoeZoom {
           const vs = this.vStars[j * n + i];
           if (isNaN(vs)) continue;
           if (vs < r.vMin || vs > r.vMax) continue;
-          const tau0 = (i + 0.5) / n;
+          const tau0 = this.scanTauMin + ((i + 0.5) / n) * (this.scanTauMax - this.scanTauMin);
           const [r0, g0, b0] = cyclicColor(tau0);
           ctx.fillStyle = `rgba(${r0},${g0},${b0},0.7)`;
           for (let k = kLow; k <= kHigh; k++) {
