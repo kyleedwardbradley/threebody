@@ -43,6 +43,8 @@ export class HorseshoeCanvas {
 
   private sector: SectorRect | null = null;
   private polygon: PolygonPoint[] | null = null;
+  // P points: where ∂D₀ ∩ ∂D₁ on a symmetry line (Moser's P).
+  private pPoints: { tau: number; v: number; label?: string }[] = [];
   private showGrid = true;
   private showImage = false;
 
@@ -94,6 +96,10 @@ export class HorseshoeCanvas {
 
   setSector(s: SectorRect | null): void { this.sector = s; this.draw(); }
   setPolygon(pts: PolygonPoint[] | null): void { this.polygon = pts; this.draw(); }
+  setPPoints(pts: { tau: number; v: number; label?: string }[]): void {
+    this.pPoints = pts;
+    this.draw();
+  }
   setVMax(v: number): void {
     if (!isFinite(v) || v <= 0) return;
     this.vMax = v;
@@ -331,6 +337,36 @@ export class HorseshoeCanvas {
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
+    }
+
+    // P markers: Moser's transverse intersection points ∂D₀ ∩ ∂D₁ on
+    // the symmetry line. Drawn last so they sit on top of everything.
+    if (this.pPoints.length > 0) {
+      for (const p of this.pPoints) {
+        const rad = (p.v / this.vMax) * R;
+        if (rad < 0 || rad > R + 8) continue;
+        const ang = angleForTau(p.tau);
+        const x = cx + rad * Math.cos(ang);
+        const y = cy + rad * Math.sin(ang);
+        ctx.fillStyle = '#fff';
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(x, y, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 12px -apple-system, system-ui, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        // Halo the label so it's readable over any background.
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 3;
+        const label = p.label ?? 'P';
+        ctx.strokeText(label, x + 8, y);
+        ctx.fillText(label, x + 8, y);
+        ctx.lineWidth = 1;
+      }
     }
 
     // Title in the top centre showing what the plot is.

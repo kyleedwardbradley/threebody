@@ -1,4 +1,5 @@
 import { HorseshoeCanvas, type SectorRect, type PolygonPoint } from './horseshoeCanvas';
+import { HorseshoeZoom, type ZoomRange } from './horseshoeZoom';
 import HorseshoeWorker from './horseshoe-worker?worker';
 import type {
   HorseshoeMainToWorker,
@@ -9,6 +10,47 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
 
 const canvas = new HorseshoeCanvas($<HTMLCanvasElement>('horseshoe-canvas'));
+const zoom = new HorseshoeZoom($<HTMLCanvasElement>('horseshoe-zoom'));
+
+// All shared state goes through these so the two views stay in lockstep.
+function applySector(s: SectorRect | null): void {
+  canvas.setSector(s); zoom.setSector(s);
+}
+function applyPolygon(pts: PolygonPoint[] | null): void {
+  canvas.setPolygon(pts); zoom.setPolygon(pts);
+}
+function applyPPoints(pts: { tau: number; v: number; label?: string }[]): void {
+  canvas.setPPoints(pts); zoom.setPPoints(pts);
+}
+function applyBeginGrid(n: number, vMax: number): void {
+  canvas.beginGrid(n, vMax); zoom.beginGrid(n, vMax);
+}
+function applyGridRow(row: number, tauStars: Float32Array, vStars: Float32Array): void {
+  canvas.setGridRow(row, tauStars, vStars);
+  zoom.setGridRow(row, tauStars, vStars);
+}
+function applyClearGrid(): void {
+  canvas.clearGrid(); zoom.clearGrid();
+}
+function applyShowGrid(on: boolean): void {
+  canvas.setShowGrid(on); zoom.setShowGrid(on);
+}
+function applyShowImage(on: boolean): void {
+  canvas.setShowImage(on); zoom.setShowImage(on);
+}
+
+// Zoom range = sector with 30% margin on each side (clamped to v ≥ 0).
+function updateZoomRange(): void {
+  const dTau = Math.max(1e-6, cfg.tauE - cfg.tauS);
+  const dV = Math.max(1e-6, cfg.vE - cfg.vS);
+  const range: ZoomRange = {
+    tauMin: cfg.tauS - 0.3 * dTau,
+    tauMax: cfg.tauE + 0.3 * dTau,
+    vMin: Math.max(0, cfg.vS - 0.3 * dV),
+    vMax: cfg.vE + 0.3 * dV,
+  };
+  zoom.setRange(range);
+}
 
 interface Cfg {
   e: number;
@@ -27,6 +69,7 @@ const cfg: Cfg = {
 
 let worker: Worker | null = null;
 type Phase = 'idle' | 'grid'
+  | 'finding-p'        // bisecting on the symmetry-line v_esc
   | 'sector-spirals'   // shooting the two τ-spirals at matched v
   | 'sector-edges'     // shooting top + bottom connectors at the effective vE
   | 'sector-refining'; // priority-queue refinement on the closed boundary
@@ -170,7 +213,7 @@ function buildInitialHeap(): void {
 }
 
 function redrawPolygon(): void {
-  canvas.setPolygon(polygonNodes.map((n) => ({
+  applyPolygon(polygonNodes.map((n) => ({
     tau: n.tau, v: n.v, escaped: n.escaped,
   })));
 }
@@ -258,20 +301,21 @@ $('run-grid').addEventListener('click', () => runGrid());
 $('stop-grid').addEventListener('click', () => stopAll());
 $('toggle-grid').addEventListener('click', () => {
   const next = !canvas.getShowGrid();
-  canvas.setShowGrid(next);
+  applyShowGrid(next);
   $('toggle-grid').textContent = next ? 'Hide grid' : 'Show grid';
 });
 $('toggle-image').addEventListener('click', () => {
   const next = !canvas.getShowImage();
-  canvas.setShowImage(next);
+  applyShowImage(next);
   $('toggle-image').textContent = next ? 'Hide image' : 'Show image';
 });
 $('run-sector').addEventListener('click', () => runSector());
 $('refine-sector').addEventListener('click', () => startRefinement());
 $('reset').addEventListener('click', () => {
   stopAll();
-  canvas.clearGrid();
-  canvas.setPolygon(null);
+  applyClearGrid();
+  applyPolygon(null);
+  applyPPoints([]);
   polygonNodes.length = 0;
   heap.length = 0;
   pending = [];
@@ -306,7 +350,7 @@ function invalidatePolygon(): void {
   heap.length = 0;
   pending = [];
   effVE = 0;
-  canvas.setPolygon(null);
+  applyPolygon(null);
   updateSectorDisplay();
   if (hadPolygon) $('status').textContent = 'sector image cleared (parameters changed)';
 }
@@ -318,17 +362,19 @@ function invalidateGrid(): void {
     killWorker();
     phase = 'idle';
   }
-  canvas.clearGrid();
+  applyClearGrid();
   if (hadGrid) $('status').textContent = 'grid cleared (parameters changed)';
 }
 
 function invalidateAll(): void {
   invalidateGrid();
   invalidatePolygon();
+  applyPPoints([]);  // P depends on e and maxPeriods
 }
 
 function stopAll(): void {
   const wasSector = phase === 'sector-spirals' || phase === 'sector-edges' || phase === 'sector-refining';
+  // finding-p just falls through to idle below
   if (worker) {
     const m: HorseshoeMainToWorker = { type: 'stop' };
     worker.postMessage(m);
@@ -346,7 +392,7 @@ function stopAll(): void {
 
 function runGrid(): void {
   if (phase !== 'idle') return;
-  canvas.beginGrid(cfg.n, cfg.vMax);
+  applyBeginGrid(cfg.n, cfg.vMax);
   const w = ensureWorker();
   const m: HorseshoeMainToWorker = {
     type: 'gridScan',
@@ -563,16 +609,37 @@ function onWorkerMsg(ev: MessageEvent<HorseshoeWorkerToMain>): void {
   const m = ev.data;
   switch (m.type) {
     case 'gridRow':
-      canvas.setGridRow(m.msg.row, m.msg.tauStars, m.msg.vStars);
+      applyGridRow(m.msg.row, m.msg.tauStars, m.msg.vStars);
       break;
     case 'gridProgress':
       $('status').textContent = `grid… ${m.done} / ${m.total}`;
       break;
     case 'gridDone':
-      phase = 'idle';
       killWorker();
-      $('status').textContent = `grid done.  ${cfg.n}×${cfg.n} = ${cfg.n * cfg.n} cells`;
+      // Now find P points (∂D₀ ∩ symmetry line at τ=0 and τ=0.5).
+      phase = 'finding-p';
+      ensureWorker().postMessage({
+        type: 'findEscape',
+        req: { e: cfg.e, maxPeriods: cfg.maxPeriods, tau0s: [0, 0.5], steps: 20 },
+      } as HorseshoeMainToWorker);
+      $('status').textContent =
+        `grid done (${cfg.n}×${cfg.n} = ${cfg.n * cfg.n} cells).  Finding P…`;
       break;
+    case 'escapeFound': {
+      if (phase !== 'finding-p') break;
+      const labels = ['P_a', 'P_p'];
+      const pts: { tau: number; v: number; label?: string }[] = [];
+      for (let i = 0; i < m.vEscs.length; i++) {
+        const v = m.vEscs[i];
+        if (isFinite(v)) pts.push({ tau: i === 0 ? 0 : 0.5, v, label: labels[i] });
+      }
+      applyPPoints(pts);
+      killWorker();
+      phase = 'idle';
+      const parts = pts.map((p) => `${p.label}=v_esc(${p.tau.toFixed(1)})=${p.v.toFixed(3)}`);
+      $('status').textContent = `grid done.  ${parts.join('  ')}`;
+      break;
+    }
     case 'shotResults': {
       const { tauStars, vStars, escapes } = m.msg;
       if (phase === 'sector-spirals') {
@@ -635,7 +702,8 @@ function updateSectorDisplay(): void {
   const s: SectorRect = {
     tauS: cfg.tauS, tauE: cfg.tauE, vS: cfg.vS, vE: top,
   };
-  canvas.setSector(s);
+  applySector(s);
+  updateZoomRange();
 }
 
 // ---------- URL query carry-over ----------

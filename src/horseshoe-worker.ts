@@ -60,6 +60,33 @@ async function gridScan(e: number, maxPeriods: number, n: number, vMax: number):
   running = false;
 }
 
+// Bisection on a single τ₀ to localise v_esc.
+function findVEscOne(e: number, maxPeriods: number, tau0: number, steps: number): number {
+  let hi = 1.5;
+  while (hi < 100 && !shoot(tau0, hi, e, maxPeriods).escaped) hi *= 1.5;
+  if (hi >= 100) return Number.NaN;
+  let lo = 0.01;
+  if (shoot(tau0, lo, e, maxPeriods).escaped) return lo;
+  for (let s = 0; s < steps; s++) {
+    const mid = 0.5 * (lo + hi);
+    if (shoot(tau0, mid, e, maxPeriods).escaped) hi = mid;
+    else lo = mid;
+  }
+  return hi;
+}
+
+async function findEscapes(
+  e: number, maxPeriods: number, tau0s: number[], steps: number,
+): Promise<void> {
+  const out = new Float32Array(tau0s.length);
+  for (let i = 0; i < tau0s.length; i++) {
+    if (!running) break;
+    out[i] = findVEscOne(e, maxPeriods, tau0s[i], steps);
+  }
+  post({ type: 'escapeFound', vEscs: out }, [out.buffer]);
+  running = false;
+}
+
 async function shootMany(
   e: number, maxPeriods: number, tau0s: number[], v0s: number[],
 ): Promise<void> {
@@ -97,6 +124,11 @@ self.onmessage = (ev: MessageEvent<HorseshoeMainToWorker>) => {
       if (running) return;
       running = true;
       shootMany(m.req.e, m.req.maxPeriods, m.req.tau0s, m.req.v0s);
+      break;
+    case 'findEscape':
+      if (running) return;
+      running = true;
+      findEscapes(m.req.e, m.req.maxPeriods, m.req.tau0s, m.req.steps);
       break;
     case 'stop':
       running = false;

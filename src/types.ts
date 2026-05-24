@@ -96,9 +96,17 @@ export interface HorseshoeShootRequest {
   v0s: number[];
 }
 
+export interface HorseshoeFindEscapeRequest {
+  e: number;
+  maxPeriods: number;
+  tau0s: number[];     // τ values at which to bisect for v_esc
+  steps: number;       // bisection steps per tau
+}
+
 export type HorseshoeMainToWorker =
   | { type: 'gridScan'; req: HorseshoeGridRequest }
   | { type: 'shoot'; req: HorseshoeShootRequest }
+  | { type: 'findEscape'; req: HorseshoeFindEscapeRequest }
   | { type: 'stop' };
 
 export interface HorseshoeRowMsg {
@@ -118,4 +126,5 @@ export type HorseshoeWorkerToMain =
   | { type: 'gridProgress'; done: number; total: number }
   | { type: 'gridDone' }
   | { type: 'shotResults'; msg: HorseshoeShootMsg }
+  | { type: 'escapeFound'; vEscs: Float32Array }
   | { type: 'stopped' };
