@@ -744,7 +744,7 @@ function refineStep(): void {
   };
   worker.postMessage(m);
   $('status').textContent =
-    `refining sector image… N=${polygonNodes.length}  longest=${top.dist.toFixed(1)}px`;
+    `refining sector image… N=${polygonNodes.length}  heap=${heap.length}  longest=${top.dist.toFixed(1)}px`;
 }
 
 function refineDone(reason: 'threshold' | 'cap' | 'stopped'): void {
@@ -935,6 +935,12 @@ function onWorkerMsg(ev: MessageEvent<HorseshoeWorkerToMain>): void {
         consumeEdgeResults(tauStars, vStars, escapes);
       } else if (phase === 'sector-refining') {
         // Pair results with pending gaps; insert midpoints, push sub-gaps.
+        // A sub-gap that's almost as long as its parent means subdivision
+        // didn't help — this is the chaos fingerprint (the boundary is
+        // fractal at this scale, midpoint shoots into a different basin).
+        // Skipping the push lets the heap drain instead of grinding
+        // forever at chaotic regions.
+        const CHAOS_RATIO = 0.75;
         for (let i = 0; i < pending.length; i++) {
           const p = pending[i];
           const tau = tauStars[i];
@@ -948,9 +954,10 @@ function onWorkerMsg(ev: MessageEvent<HorseshoeWorkerToMain>): void {
           insertSorted(node);
           if (esc) continue;
           const mid = screenXY(tau, v);
+          const parentDist = p.gap.dist;
           const dxA = mid.x - p.gap.ax, dyA = mid.y - p.gap.ay;
           const distA = Math.hypot(dxA, dyA);
-          if (distA > THRESHOLD_PX) {
+          if (distA > THRESHOLD_PX && distA < CHAOS_RATIO * parentDist) {
             hPush({
               sA: p.gap.sA, sB: p.sMid,
               ax: p.gap.ax, ay: p.gap.ay, bx: mid.x, by: mid.y,
@@ -959,7 +966,7 @@ function onWorkerMsg(ev: MessageEvent<HorseshoeWorkerToMain>): void {
           }
           const dxB = p.gap.bx - mid.x, dyB = p.gap.by - mid.y;
           const distB = Math.hypot(dxB, dyB);
-          if (distB > THRESHOLD_PX) {
+          if (distB > THRESHOLD_PX && distB < CHAOS_RATIO * parentDist) {
             hPush({
               sA: p.sMid, sB: p.gap.sB,
               ax: mid.x, ay: mid.y, bx: p.gap.bx, by: p.gap.by,
