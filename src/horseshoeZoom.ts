@@ -26,6 +26,9 @@ export class HorseshoeZoom {
   private spiralLeft: PolygonPoint[] | null = null;
   private spiralRight: PolygonPoint[] | null = null;
   private pPoints: { tau: number; v: number; label?: string }[] = [];
+  private boundaryD0: { tau: number; v: number }[] | null = null;
+  private showBoundaries = true;
+  private showVk = false;
   private showGrid = true;
   private showImage = false;
   private colorRange: { lo: number; hi: number } | null = null;
@@ -79,6 +82,12 @@ export class HorseshoeZoom {
   }
   setShowGrid(on: boolean): void { this.showGrid = on; this.draw(); }
   setShowImage(on: boolean): void { this.showImage = on; this.draw(); }
+  setBoundaryD0(pts: { tau: number; v: number }[] | null): void {
+    this.boundaryD0 = pts;
+    this.draw();
+  }
+  setShowBoundaries(on: boolean): void { this.showBoundaries = on; this.draw(); }
+  setShowVk(on: boolean): void { this.showVk = on; this.draw(); }
   setColorRange(lo: number, hi: number): void {
     if (!isFinite(lo) || !isFinite(hi) || hi <= lo) return;
     this.colorRange = { lo, hi };
@@ -232,41 +241,47 @@ export class HorseshoeZoom {
       ctx.stroke();
     }
 
-    // Polygon outline only — no fill in the zoom view. The polygon's
-    // boundary is one continuous loop in (τ*, v*), but a narrow Cartesian
-    // τ window cuts it into many sub-paths (one per "wind" of the curve
-    // through the visible strip). Canvas's evenodd fill would implicitly
-    // close each sub-path with a chord back to its start, producing many
-    // spurious triangular regions. Stroking only avoids this entirely and
-    // shows exactly the polygon outline.
-    if (this.polygon && this.polygon.length > 2) {
+    // Stroke a (τ, v) polyline in the zoom panel.
+    // The polygon's boundary is one continuous loop in (τ*, v*), but a
+    // narrow Cartesian τ window cuts it into many sub-paths (one per
+    // "wind" of the curve through the visible strip). Canvas's evenodd
+    // fill would implicitly close each sub-path with a chord back to its
+    // start, producing many spurious triangular regions. Stroking only
+    // avoids this and shows exactly the outline.
+    //
+    // tauMap lets the same routine draw V_k = ρ(U_k) by passing t → -t,
+    // and ∂D₁ = ρ(∂D₀) the same way. closeLoop walks one extra wrap
+    // segment so closed curves render their wrap chord too.
+    const drawPolyline = (
+      pts: ReadonlyArray<{ tau: number; v: number; escaped?: boolean }>,
+      color: string, lineWidth: number,
+      tauMap: (t: number) => number, closeLoop: boolean,
+    ): void => {
+      if (pts.length < 2) return;
       ctx.save();
       ctx.beginPath();
       ctx.rect(p.x, p.y, p.w, p.h);
       ctx.clip();
-      ctx.strokeStyle = 'rgba(255, 130, 130, 0.95)';
-      ctx.lineWidth = 1.2;
-      // Lift the polygon's cyclic τ values into a continuous representation
-      // by unwrapping each node relative to the previous one — a step from
-      // τ=0.97 → τ=0.03 becomes 0.97 → 1.03, so the path stays continuous
-      // across the τ=0 seam instead of jumping back across the plot.
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
       ctx.beginPath();
       let started = false;
       let prevTauU = 0;
       const center = 0.5 * (this.range.tauMin + this.range.tauMax);
-      for (const pt of this.polygon) {
+      const end = closeLoop ? pts.length + 1 : pts.length;
+      for (let i = 0; i < end; i++) {
+        const pt = pts[i % pts.length];
         if (pt.escaped || !isFinite(pt.tau) || !isFinite(pt.v)) {
           started = false; continue;
         }
+        const tauRaw = tauMap(pt.tau);
         let tauU: number;
         if (started) {
-          let delta = pt.tau - prevTauU;
-          // Normalise delta into (-0.5, 0.5] by adding/subtracting 1s.
+          let delta = tauRaw - prevTauU;
           delta -= Math.round(delta);
           tauU = prevTauU + delta;
         } else {
-          // Start near the visible window center.
-          tauU = pt.tau - Math.round(pt.tau - center);
+          tauU = tauRaw - Math.round(tauRaw - center);
         }
         const x = this.toX(tauU);
         const y = this.toY(pt.v);
@@ -276,6 +291,22 @@ export class HorseshoeZoom {
       }
       ctx.stroke();
       ctx.restore();
+    };
+
+    // Polygon (U_k = φ(R) ∩ R) outline in red.
+    if (this.polygon && this.polygon.length > 2) {
+      drawPolyline(this.polygon, 'rgba(255, 130, 130, 0.95)', 1.2, (t) => t, false);
+    }
+
+    // V_k = ρ(U_k): reflection of the polygon across τ=0. Cyan.
+    if (this.polygon && this.showVk && this.polygon.length > 2) {
+      drawPolyline(this.polygon, 'rgba(140, 220, 235, 0.95)', 1.2, (t) => -t, false);
+    }
+
+    // ∂D₀ (yellow) and ∂D₁ = ρ(∂D₀) (green) boundary curves.
+    if (this.showBoundaries && this.boundaryD0 && this.boundaryD0.length > 1) {
+      drawPolyline(this.boundaryD0, '#ffd24a', 1.5, (t) => t, true);
+      drawPolyline(this.boundaryD0, '#5fd07a', 1.5, (t) => -t, true);
     }
 
     // P markers — render at any τ-shift that lands inside the window.

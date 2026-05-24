@@ -103,7 +103,7 @@ let d0Pending: { tauMid: number; gap: D0Gap }[] = [];
 const D0_INITIAL_K = 64;
 const D0_BATCH = 8;
 const D0_CAP = 5000;
-const D0_THRESHOLD = 1;           // visual pixels
+const D0_THRESHOLD = 2;           // visual pixels
 const D0_BISECT_STEPS = 18;
 
 // Effective vE — clamped down from cfg.vE if either τ-spiral escapes
@@ -354,15 +354,18 @@ $('toggle-image').addEventListener('click', () => {
   $('toggle-image').textContent = next ? 'Hide image' : 'Show image';
 });
 $('run-boundaries').addEventListener('click', () => runBoundaries());
+$('refine-boundaries').addEventListener('click', () => startBoundaryRefinement());
 $('toggle-boundaries').addEventListener('click', () => {
   const next = !canvas.getShowBoundaries();
   canvas.setShowBoundaries(next);
+  zoom.setShowBoundaries(next);
   $('toggle-boundaries').textContent = next ? 'Hide boundaries' : 'Show boundaries';
 });
 $('toggle-vk').addEventListener('click', () => {
   if (!isSectorSymmetric()) return;
   const next = !canvas.getShowVk();
   canvas.setShowVk(next);
+  zoom.setShowVk(next);
   $('toggle-vk').textContent = next ? 'Hide V_k' : 'Show V_k';
 });
 
@@ -380,6 +383,7 @@ function updateVkButton(): void {
     : 'V_k = ρ(U_k) only when τc = 0 (sector centred on P)';
   if (!sym && canvas.getShowVk()) {
     canvas.setShowVk(false);
+    zoom.setShowVk(false);
     btn.textContent = 'Show V_k';
   }
 }
@@ -438,6 +442,7 @@ $('reset').addEventListener('click', () => {
   applySpiralPair(null, null);
   applyPPoints([]);
   canvas.setBoundaryD0(null);
+  zoom.setBoundaryD0(null);
   d0Points.length = 0;
   d0Heap.length = 0;
   d0Pending = [];
@@ -501,6 +506,7 @@ function invalidateAll(): void {
   d0Heap.length = 0;
   d0Pending = [];
   canvas.setBoundaryD0(null);
+  zoom.setBoundaryD0(null);
 }
 
 function stopAll(): void {
@@ -815,6 +821,7 @@ function runBoundaries(): void {
   d0Heap.length = 0;
   d0Pending = [];
   canvas.setBoundaryD0(null);
+  zoom.setBoundaryD0(null);
   const tau0s = Array.from({ length: D0_INITIAL_K }, (_, i) => i / D0_INITIAL_K);
   ensureWorker().postMessage({
     type: 'findEscape',
@@ -867,7 +874,9 @@ function insertD0Sorted(pt: D0Point): void {
   d0Points.splice(lo, 0, pt);
 }
 function applyBoundary(): void {
-  canvas.setBoundaryD0(d0Points.map((p) => ({ tau: p.tau, v: p.vEsc })));
+  const pts = d0Points.map((p) => ({ tau: p.tau, v: p.vEsc }));
+  canvas.setBoundaryD0(pts);
+  zoom.setBoundaryD0(pts);
 }
 
 function consumeBoundaryInitial(vEscs: Float32Array): void {
@@ -879,6 +888,31 @@ function consumeBoundaryInitial(vEscs: Float32Array): void {
   d0Heap.length = 0;
   applyBoundary();
   boundariesDone('threshold');
+  // Refinement is now manual via the "Refine D0/D1" button — the initial
+  // K=64 bisection lands close enough to the curve that going further is
+  // only useful when the user asks for it.
+}
+
+function startBoundaryRefinement(): void {
+  if (phase !== 'idle') return;
+  if (d0Points.length < 2) {
+    $('status').textContent = 'no boundaries to refine — compute D₀/D₁ first';
+    return;
+  }
+  ensureWorker();
+  d0Heap.length = 0;
+  const n = d0Points.length;
+  for (let i = 0; i < n; i++) {
+    pushD0Gap(d0Points[i], d0Points[(i + 1) % n]);
+  }
+  if (d0Heap.length === 0) {
+    killWorker();
+    $('status').textContent =
+      `boundaries: all gaps already ≤ ${D0_THRESHOLD} px — nothing to refine`;
+    return;
+  }
+  phase = 'boundary-refining';
+  boundaryRefineStep();
 }
 
 function boundaryRefineStep(): void {
