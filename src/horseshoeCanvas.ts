@@ -536,7 +536,7 @@ export class HorseshoeCanvas {
     // and number labels on spokes; in polar mode use the months scheme.
     ctx.strokeStyle = '#1e2638';
     ctx.lineWidth = lw(1);
-    ctx.font = '10px -apple-system, system-ui, sans-serif';
+    ctx.font = `${lw(10)}px -apple-system, system-ui, sans-serif`;
     ctx.fillStyle = '#556';
     const ringValues = [this.vMax / 4, this.vMax / 2, (3 * this.vMax) / 4, this.vMax];
     for (const val of ringValues) {
@@ -626,7 +626,7 @@ export class HorseshoeCanvas {
         ctx.fill();
         ctx.stroke();
         ctx.fillStyle = '#fff';
-        ctx.font = 'bold 12px -apple-system, system-ui, sans-serif';
+        ctx.font = `bold ${lw(12)}px -apple-system, system-ui, sans-serif`;
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
         ctx.strokeStyle = '#000';
