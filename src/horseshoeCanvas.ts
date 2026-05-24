@@ -68,12 +68,6 @@ export class HorseshoeCanvas {
   private dragEnd: { x: number; y: number } | null = null;
   onZoomBoxDrawn: ((region: ZoomRegion) => void) | null = null;
 
-  // Padding in zoom mode (for axis labels).
-  private readonly PAD_L = 50;
-  private readonly PAD_R = 12;
-  private readonly PAD_T = 30;
-  private readonly PAD_B = 28;
-
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     const ctx = canvas.getContext('2d');
@@ -91,6 +85,7 @@ export class HorseshoeCanvas {
 
   setZoomRegion(r: ZoomRegion | null): void {
     this.zoomRegion = r;
+    this.offValid = false;       // re-rasterise heatmap for new mapping
     this.draw();
   }
   getZoomRegion(): ZoomRegion | null { return this.zoomRegion; }
@@ -150,31 +145,21 @@ export class HorseshoeCanvas {
       R: Math.max(0, Math.min(w, h) / 2 - 28),
     };
   }
-  private zoomPlotRect(): { x: number; y: number; w: number; h: number } {
-    const cw = this.canvas.clientWidth;
-    const ch = this.canvas.clientHeight;
-    return {
-      x: this.PAD_L,
-      y: this.PAD_T,
-      w: Math.max(0, cw - this.PAD_L - this.PAD_R),
-      h: Math.max(0, ch - this.PAD_T - this.PAD_B),
-    };
-  }
   private screenToTauV(x: number, y: number): { tau: number; v: number } | null {
-    if (this.zoomRegion) {
-      const p = this.zoomPlotRect();
-      if (x < p.x || x > p.x + p.w || y < p.y || y > p.y + p.h) return null;
-      const r = this.zoomRegion;
-      const tau = r.tauMin + ((x - p.x) / p.w) * (r.tauMax - r.tauMin);
-      const v = r.vMax - ((y - p.y) / p.h) * (r.vMax - r.vMin);
-      return { tau, v };
-    }
     const { cx, cy, R } = this.polarGeom();
     if (R <= 0) return null;
     const dx = x - cx, dy = y - cy;
     const rad = Math.hypot(dx, dy);
     if (rad > R) return null;
-    const ang = Math.atan2(dy, dx) + Math.PI / 2;
+    let ang = Math.atan2(dy, dx) + Math.PI / 2;
+    ang = ((ang % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+    if (this.zoomRegion) {
+      // Polar-stretched: the visible disc represents the zoom (τ, v) range.
+      const r = this.zoomRegion;
+      const tau = r.tauMin + (ang / (2 * Math.PI)) * (r.tauMax - r.tauMin);
+      const v = r.vMin + (rad / R) * (r.vMax - r.vMin);
+      return { tau, v };
+    }
     let tau = ang / (2 * Math.PI);
     tau = tau - Math.floor(tau);
     const v = (rad / R) * this.vMax;
@@ -203,19 +188,11 @@ export class HorseshoeCanvas {
     const vMin = Math.min(...vs);
     const vMax = Math.max(...vs);
     if (vMax <= vMin) return null;
-    // In polar mode τ is cyclic; pick the bounding arc by gap-complement.
-    // In zoom mode τ is already linear (continuous), so use plain min/max.
-    let tauMin: number, tauMax: number;
-    if (this.zoomRegion) {
-      tauMin = Math.min(...taus);
-      tauMax = Math.max(...taus);
-    } else {
-      const b = cyclicTauBounds(taus);
-      tauMin = b.min;
-      tauMax = b.max;
-    }
-    if (tauMax <= tauMin) return null;
-    return { tauMin, tauMax, vMin, vMax };
+    // τ is cyclic in both polar and zoom-stretched modes; pick the bounding
+    // arc by largest-gap complement so a drag straddling the seam works.
+    const b = cyclicTauBounds(taus);
+    if (b.max <= b.min) return null;
+    return { tauMin: b.min, tauMax: b.max, vMin, vMax };
   }
 
   // ----- grid -----
@@ -362,14 +339,17 @@ export class HorseshoeCanvas {
     if (R <= 0) { this.offValid = true; return; }
 
     const n = this.n;
-    const displayVMax = this.vMax;
     const scanVMax = this.scanVMax;
+    // In zoom mode the visible disc represents the zoom (τ, v) rectangle;
+    // otherwise it represents [0, 1) × [0, displayVMax].
+    const zoom = this.zoomRegion;
+    const tMin = zoom ? zoom.tauMin : 0;
+    const tMax = zoom ? zoom.tauMax : 1;
+    const vMin = zoom ? zoom.vMin   : 0;
+    const vMaxLocal = zoom ? zoom.vMax : this.vMax;
+    const tSpan = tMax - tMin;
+    const vSpan = vMaxLocal - vMin;
 
-    // Pixel sampling: for each pixel inside the disc, find which (i,j) cell
-    // it belongs to. Cells live at scan-time v values in [0, scanVMax].
-    // The display polar disc spans v ∈ [0, displayVMax]. A pixel at radius r
-    // represents v = (r/R) * displayVMax — if that exceeds scanVMax, no scan
-    // cell covers it (leave transparent).
     const imageData = ctx.createImageData(wi, hi);
     const data = imageData.data;
     for (let py = 0; py < hi; py++) {
@@ -378,13 +358,13 @@ export class HorseshoeCanvas {
         const dx = px - cx;
         const rad = Math.hypot(dx, dy);
         if (rad > R) continue;
-        const vDisplay = (rad / R) * displayVMax;
-        if (vDisplay > scanVMax) continue;
-        // angle = atan2(dy, dx) + π/2 matches τ=0 at top, clockwise.
-        const ang = Math.atan2(dy, dx) + Math.PI / 2;
-        let tau = ang / (2 * Math.PI);
-        tau = tau - Math.floor(tau);
-        const i = Math.min(n - 1, Math.max(0, Math.floor(tau * n)));
+        const vDisplay = vMin + (rad / R) * vSpan;
+        if (vDisplay > scanVMax || vDisplay < 0) continue;
+        let ang = Math.atan2(dy, dx) + Math.PI / 2;
+        ang = ((ang % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+        const tauVis = tMin + (ang / (2 * Math.PI)) * tSpan;
+        const tauMod = ((tauVis % 1) + 1) % 1;
+        const i = Math.min(n - 1, Math.max(0, Math.floor(tauMod * n)));
         const j = Math.min(n - 1, Math.max(0, Math.floor((vDisplay / scanVMax) * n)));
         const ts = this.tauStars[j * n + i];
         if (isNaN(ts)) continue;
@@ -403,8 +383,7 @@ export class HorseshoeCanvas {
   // ----- composite draw -----
 
   private draw(): void {
-    if (this.zoomRegion) this.drawZoom();
-    else this.drawPolar();
+    this.drawPolar();
     this.drawDragBox();
   }
 
@@ -436,14 +415,34 @@ export class HorseshoeCanvas {
     const R = Math.max(0, Math.min(w, h) / 2 - 28);
     if (R <= 0) return;
 
+    // Projection setup. In zoom mode the visible (τ, v) rectangle is
+    // stretched to fill the disc: τ → full 2π circle, v → full radius.
+    const zoom = this.zoomRegion;
+    const tMin = zoom ? zoom.tauMin : 0;
+    const tMax = zoom ? zoom.tauMax : 1;
+    const vMin = zoom ? zoom.vMin : 0;
+    const vMaxLocal = zoom ? zoom.vMax : this.vMax;
+    const tSpan = tMax - tMin;
+    const vSpan = vMaxLocal - vMin;
+    const angleOf = (tau: number): number =>
+      ((tau - tMin) / tSpan) * 2 * Math.PI - Math.PI / 2;
+    const radiusOf = (v: number): number => ((v - vMin) / vSpan) * R;
+    // Unwrap τ to the closest representative inside [tMin, tMax], or null
+    // if no shift lands in range. In non-zoom mode all τ are visible.
+    const unwrap = (tau: number): number | null => {
+      if (!zoom) return tau - Math.floor(tau);
+      const k = Math.round(((tMin + tMax) / 2 - tau));
+      const u = tau + k;
+      return (u >= tMin && u <= tMax) ? u : null;
+    };
+    const vIn = (v: number): boolean => v >= vMin && v <= vMaxLocal;
+
     if (this.showGrid) {
       if (!this.offValid) this.rasterise();
       ctx.drawImage(this.off, 0, 0, w, h);
     }
 
-    // Image-dot overlay: for each non-escape grid cell, plot at (τ*, |v*|)
-    // coloured by τ₀ (the input phase). Same cyclic colourmap as the grid,
-    // applied to the input rather than the output.
+    // Image dots: cell (i, j) plotted at (τ*, |v*|) coloured by τ₀.
     if (this.showImage && this.tauStars && this.vStars && this.n > 0) {
       const n = this.n;
       for (let j = 0; j < n; j++) {
@@ -452,9 +451,11 @@ export class HorseshoeCanvas {
           if (isNaN(ts)) continue;
           const vs = this.vStars[j * n + i];
           if (isNaN(vs)) continue;
-          const rad = (vs / this.vMax) * R;
+          const tu = unwrap(ts);
+          if (tu === null || !vIn(vs)) continue;
+          const rad = radiusOf(vs);
           if (rad < 0 || rad > R) continue;
-          const ang = angleForTau(ts);
+          const ang = angleOf(tu);
           const x = cx + rad * Math.cos(ang);
           const y = cy + rad * Math.sin(ang);
           const tau0 = (i + 0.5) / n;
@@ -467,23 +468,29 @@ export class HorseshoeCanvas {
       }
     }
 
-    // Polar grid: rings + month spokes.
+    // Rings + spokes. In zoom mode use niceTicks on the zoomed ranges
+    // and number labels on spokes; in polar mode use the months scheme.
     ctx.strokeStyle = '#1e2638';
     ctx.lineWidth = 1;
     ctx.font = '10px -apple-system, system-ui, sans-serif';
     ctx.fillStyle = '#556';
-    const rings = 4;
-    for (let i = 1; i <= rings; i++) {
-      const r = (R * i) / rings;
+    const ringValues = zoom
+      ? niceTicks(vMin, vMaxLocal, 4)
+      : [vMaxLocal / 4, vMaxLocal / 2, (3 * vMaxLocal) / 4, vMaxLocal];
+    for (const val of ringValues) {
+      const r = radiusOf(val);
+      if (r <= 0 || r > R) continue;
       ctx.beginPath();
       ctx.arc(cx, cy, r, 0, Math.PI * 2);
       ctx.stroke();
-      const val = (this.vMax * i) / rings;
-      ctx.fillText(val.toFixed(2), cx + 3, cy - r - 2);
+      ctx.fillText(val.toFixed(zoom ? 3 : 2), cx + 3, cy - r - 2);
     }
     ctx.strokeStyle = '#1a2030';
-    for (let m = 0; m < 12; m++) {
-      const a = angleForTau(m / 12);
+    const spokeTaus = zoom
+      ? niceTicks(tMin, tMax, 8)
+      : Array.from({ length: 12 }, (_, m) => m / 12);
+    for (const t of spokeTaus) {
+      const a = angleOf(t);
       ctx.beginPath();
       ctx.moveTo(cx, cy);
       ctx.lineTo(cx + R * Math.cos(a), cy + R * Math.sin(a));
@@ -492,45 +499,81 @@ export class HorseshoeCanvas {
     ctx.fillStyle = '#8a8fa5';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const months = ['J','F','M','A','M','J','J','A','S','O','N','D'];
-    for (let m = 0; m < 12; m++) {
-      const a = angleForTau((m + 0.5) / 12);
-      ctx.fillText(months[m], cx + (R + 14) * Math.cos(a), cy + (R + 14) * Math.sin(a));
+    if (zoom) {
+      for (const t of spokeTaus) {
+        const a = angleOf(t);
+        ctx.fillText(t.toFixed(3), cx + (R + 16) * Math.cos(a), cy + (R + 16) * Math.sin(a));
+      }
+    } else {
+      const months = ['J','F','M','A','M','J','J','A','S','O','N','D'];
+      for (let m = 0; m < 12; m++) {
+        const a = angleOf((m + 0.5) / 12);
+        ctx.fillText(months[m], cx + (R + 14) * Math.cos(a), cy + (R + 14) * Math.sin(a));
+      }
     }
 
-    // Sector (blue translucent annular wedge).
+    // Sector overlay (annular wedge in stretched coords).
     if (this.sector) {
       const s = this.sector;
-      const rIn = Math.max(0, Math.min(R, (s.vS / this.vMax) * R));
-      const rOut = Math.max(0, Math.min(R, (s.vE / this.vMax) * R));
-      const aS = angleForTau(s.tauS);
-      const aE = angleForTau(s.tauE);
-      // Canvas arcs go counter-clockwise when anticlockwise=true; our angle
-      // increases clockwise with τ. Use clockwise=true (default false flipped
-      // because y axis is flipped). The math: angleForTau is monotonic in τ,
-      // so going from aS to aE (with aE > aS in math coords) traces tau
-      // increasing.
-      ctx.fillStyle = 'rgba(80, 140, 255, 0.35)';
-      ctx.strokeStyle = 'rgba(140, 180, 255, 0.9)';
+      const tauSU = unwrap(s.tauS);
+      const tauEU = unwrap(s.tauE);
+      if (tauSU !== null && tauEU !== null) {
+        const rIn  = Math.max(0, Math.min(R, radiusOf(Math.max(vMin, s.vS))));
+        const rOut = Math.max(0, Math.min(R, radiusOf(Math.min(vMaxLocal, s.vE))));
+        if (rOut > rIn) {
+          const aS = angleOf(tauSU);
+          const aE = angleOf(tauEU);
+          ctx.fillStyle = 'rgba(80, 140, 255, 0.35)';
+          ctx.strokeStyle = 'rgba(140, 180, 255, 0.9)';
+          ctx.lineWidth = 1.2;
+          ctx.beginPath();
+          const fromA = aS;
+          const toA = aE > aS ? aE : aE + 2 * Math.PI;
+          ctx.arc(cx, cy, rOut, fromA, toA, false);
+          ctx.arc(cx, cy, rIn, toA, fromA, true);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        }
+      }
+    }
+
+    // Polygon: closed boundary of φ(R), filled with evenodd so folds
+    // appear as holes. Each node unwrapped relative to its predecessor
+    // for path continuity across the zoom seam.
+    if (this.polygon && this.polygon.length > 2) {
+      ctx.fillStyle = 'rgba(255, 90, 90, 0.22)';
+      ctx.strokeStyle = 'rgba(255, 130, 130, 0.9)';
       ctx.lineWidth = 1.2;
       ctx.beginPath();
-      // sweep angle range
-      const fromA = aS;
-      const toA = aE > aS ? aE : aE + 2 * Math.PI;
-      ctx.arc(cx, cy, rOut, fromA, toA, false);
-      ctx.arc(cx, cy, rIn, toA, fromA, true);
+      let started = false;
+      for (const p of this.polygon) {
+        if (p.escaped || !isFinite(p.tau) || !isFinite(p.v)) {
+          started = false; continue;
+        }
+        const tu = unwrap(p.tau);
+        if (tu === null || !vIn(p.v)) { started = false; continue; }
+        const rad = radiusOf(p.v);
+        if (rad < 0 || rad > R) { started = false; continue; }
+        const a = angleOf(tu);
+        const x = cx + rad * Math.cos(a);
+        const y = cy + rad * Math.sin(a);
+        if (started) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+        started = true;
+      }
       ctx.closePath();
-      ctx.fill();
+      ctx.fill('evenodd');
       ctx.stroke();
     }
 
-    // P markers: Moser's transverse intersection points ∂D₀ ∩ ∂D₁ on
-    // the symmetry line. Drawn last so they sit on top of everything.
+    // P markers
     if (this.pPoints.length > 0) {
       for (const p of this.pPoints) {
-        const rad = (p.v / this.vMax) * R;
+        const tu = unwrap(p.tau);
+        if (tu === null || !vIn(p.v)) continue;
+        const rad = radiusOf(p.v);
         if (rad < 0 || rad > R + 8) continue;
-        const ang = angleForTau(p.tau);
+        const ang = angleOf(tu);
         const x = cx + rad * Math.cos(ang);
         const y = cy + rad * Math.sin(ang);
         ctx.fillStyle = '#fff';
@@ -544,7 +587,6 @@ export class HorseshoeCanvas {
         ctx.font = 'bold 12px -apple-system, system-ui, sans-serif';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
-        // Halo the label so it's readable over any background.
         ctx.strokeStyle = '#000';
         ctx.lineWidth = 3;
         const label = p.label ?? 'P';
@@ -554,11 +596,14 @@ export class HorseshoeCanvas {
       }
     }
 
-    // Title in the top centre showing what the plot is.
+    // Title text
     {
       const lines: string[] = [];
       if (this.showGrid && this.tauStars) lines.push('grid: (τ₀, v₀)  colour = τ*');
       if (this.showImage && this.tauStars) lines.push('image: (τ*, |v*|)  colour = τ₀');
+      if (zoom) lines.push(
+        `zoom: τ∈[${tMin.toFixed(3)}, ${tMax.toFixed(3)}],  v∈[${vMin.toFixed(3)}, ${vMaxLocal.toFixed(3)}]`,
+      );
       ctx.fillStyle = '#8a8fa5';
       ctx.font = '11px -apple-system, system-ui, sans-serif';
       ctx.textAlign = 'left';
@@ -568,231 +613,9 @@ export class HorseshoeCanvas {
       }
     }
 
-    // Cyclic colour-bar legend (top right) when grid is visible.
     if (this.showGrid && this.tauStars) this.drawColorBar(ctx, w, h);
-
-    // Polygon: closed boundary of φ(R), filled with evenodd rule so folds
-    // (which wind the curve twice) become visible as holes rather than
-    // being covered up by uniform fill.
-    if (this.polygon && this.polygon.length > 2) {
-      ctx.fillStyle = 'rgba(255, 90, 90, 0.22)';
-      ctx.strokeStyle = 'rgba(255, 130, 130, 0.9)';
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      let started = false;
-      for (const p of this.polygon) {
-        if (p.escaped || !isFinite(p.tau) || !isFinite(p.v)) {
-          started = false; continue;
-        }
-        const rad = (p.v / this.vMax) * R;
-        if (rad < 0 || rad > R) { started = false; continue; }
-        const a = angleForTau(p.tau);
-        const x = cx + rad * Math.cos(a);
-        const y = cy + rad * Math.sin(a);
-        if (started) ctx.lineTo(x, y); else ctx.moveTo(x, y);
-        started = true;
-      }
-      ctx.closePath();
-      ctx.fill('evenodd');
-      ctx.stroke();
-    }
   }
 
-  // Cartesian-stretched view of the data, bounded by this.zoomRegion.
-  // Same data sources as drawPolar, projected through linear (τ, v) → (x, y).
-  private drawZoom(): void {
-    const ctx = this.ctx;
-    const cw = this.canvas.clientWidth;
-    const ch = this.canvas.clientHeight;
-    ctx.clearRect(0, 0, cw, ch);
-    ctx.fillStyle = '#06060e';
-    ctx.fillRect(0, 0, cw, ch);
-    const p = this.zoomPlotRect();
-    const r = this.zoomRegion!;
-    if (p.w <= 0 || p.h <= 0 || r.tauMax <= r.tauMin || r.vMax <= r.vMin) return;
-
-    // Plot background
-    ctx.fillStyle = '#0a0a12';
-    ctx.fillRect(p.x, p.y, p.w, p.h);
-
-    const toX = (tau: number) =>
-      p.x + ((tau - r.tauMin) / (r.tauMax - r.tauMin)) * p.w;
-    const toY = (v: number) =>
-      p.y + p.h - ((v - r.vMin) / (r.vMax - r.vMin)) * p.h;
-
-    // --- Grid heatmap as Cartesian cells, iterate τ-shifts for wrap support
-    if (this.showGrid && this.tauStars && this.n > 0) {
-      const n = this.n;
-      const cellTau = 1 / n;
-      const cellV = this.scanVMax / n;
-      const j0 = Math.max(0, Math.floor(r.vMin / cellV));
-      const j1 = Math.min(n, Math.ceil(r.vMax / cellV) + 1);
-      const kLow = Math.floor(r.tauMin);
-      const kHigh = Math.floor(r.tauMax);
-      for (let k = kLow; k <= kHigh; k++) {
-        const localMin = r.tauMin - k;
-        const localMax = r.tauMax - k;
-        const i0 = Math.max(0, Math.floor(localMin / cellTau));
-        const i1 = Math.min(n, Math.ceil(localMax / cellTau) + 1);
-        for (let j = j0; j < j1; j++) {
-          for (let i = i0; i < i1; i++) {
-            const ts = this.tauStars[j * n + i];
-            if (isNaN(ts)) continue;
-            const x0 = toX(i * cellTau + k);
-            const x1 = toX((i + 1) * cellTau + k);
-            const y0 = toY((j + 1) * cellV);
-            const y1 = toY(j * cellV);
-            const xMin = Math.max(p.x, Math.min(x0, x1));
-            const xMax = Math.min(p.x + p.w, Math.max(x0, x1));
-            const yMin = Math.max(p.y, Math.min(y0, y1));
-            const yMax = Math.min(p.y + p.h, Math.max(y0, y1));
-            if (xMax <= xMin || yMax <= yMin) continue;
-            const [rr, gg, bb] = cyclicColor(ts);
-            ctx.fillStyle = `rgb(${rr},${gg},${bb})`;
-            ctx.fillRect(xMin, yMin, xMax - xMin, yMax - yMin);
-          }
-        }
-      }
-    }
-
-    // --- Image dots (coloured by τ₀)
-    if (this.showImage && this.tauStars && this.vStars && this.n > 0) {
-      const n = this.n;
-      const kLow = Math.floor(r.tauMin);
-      const kHigh = Math.floor(r.tauMax);
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(p.x, p.y, p.w, p.h);
-      ctx.clip();
-      for (let j = 0; j < n; j++) {
-        for (let i = 0; i < n; i++) {
-          const ts = this.tauStars[j * n + i];
-          if (isNaN(ts)) continue;
-          const vs = this.vStars[j * n + i];
-          if (isNaN(vs)) continue;
-          if (vs < r.vMin || vs > r.vMax) continue;
-          const tau0 = (i + 0.5) / n;
-          const [r0, g0, b0] = cyclicColor(tau0);
-          ctx.fillStyle = `rgba(${r0},${g0},${b0},0.7)`;
-          for (let k = kLow; k <= kHigh; k++) {
-            const tauU = ts + k;
-            if (tauU < r.tauMin || tauU > r.tauMax) continue;
-            ctx.beginPath();
-            ctx.arc(toX(tauU), toY(vs), 1.6, 0, Math.PI * 2);
-            ctx.fill();
-          }
-        }
-      }
-      ctx.restore();
-    }
-
-    // --- Sector rectangle
-    if (this.sector) {
-      const s = this.sector;
-      ctx.fillStyle = 'rgba(80, 140, 255, 0.30)';
-      ctx.strokeStyle = 'rgba(140, 180, 255, 0.9)';
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      ctx.rect(toX(s.tauS), toY(s.vE), toX(s.tauE) - toX(s.tauS), toY(s.vS) - toY(s.vE));
-      ctx.fill();
-      ctx.stroke();
-    }
-
-    // --- Polygon outline (stroke only, with continuous τ unwrap)
-    if (this.polygon && this.polygon.length > 2) {
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(p.x, p.y, p.w, p.h);
-      ctx.clip();
-      ctx.strokeStyle = 'rgba(255, 130, 130, 0.95)';
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      const center = 0.5 * (r.tauMin + r.tauMax);
-      let started = false;
-      let prevTauU = 0;
-      for (const pt of this.polygon) {
-        if (pt.escaped || !isFinite(pt.tau) || !isFinite(pt.v)) {
-          started = false; continue;
-        }
-        let tauU: number;
-        if (started) {
-          let d = pt.tau - prevTauU;
-          d -= Math.round(d);
-          tauU = prevTauU + d;
-        } else {
-          tauU = pt.tau - Math.round(pt.tau - center);
-        }
-        const x = toX(tauU), y = toY(pt.v);
-        if (started) ctx.lineTo(x, y); else ctx.moveTo(x, y);
-        prevTauU = tauU;
-        started = true;
-      }
-      ctx.stroke();
-      ctx.restore();
-    }
-
-    // --- P markers
-    {
-      const kLow = Math.floor(r.tauMin);
-      const kHigh = Math.floor(r.tauMax);
-      for (const pt of this.pPoints) {
-        if (pt.v < r.vMin || pt.v > r.vMax) continue;
-        for (let k = kLow; k <= kHigh; k++) {
-          const tauU = pt.tau + k;
-          if (tauU < r.tauMin || tauU > r.tauMax) continue;
-          const x = toX(tauU), y = toY(pt.v);
-          ctx.fillStyle = '#fff';
-          ctx.strokeStyle = '#000';
-          ctx.lineWidth = 1.5;
-          ctx.beginPath();
-          ctx.arc(x, y, 5, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.stroke();
-          ctx.fillStyle = '#fff';
-          ctx.font = 'bold 12px -apple-system, system-ui, sans-serif';
-          ctx.textAlign = 'left';
-          ctx.textBaseline = 'middle';
-          ctx.strokeStyle = '#000';
-          ctx.lineWidth = 3;
-          const label = pt.label ?? 'P';
-          ctx.strokeText(label, x + 8, y);
-          ctx.fillText(label, x + 8, y);
-        }
-      }
-    }
-
-    // --- Border + axis ticks
-    ctx.strokeStyle = '#3a3a48';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(p.x + 0.5, p.y + 0.5, p.w - 1, p.h - 1);
-    ctx.fillStyle = '#8a8fa5';
-    ctx.font = '10px -apple-system, system-ui, sans-serif';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-    for (const t of niceTicks(r.tauMin, r.tauMax, 6)) {
-      const x = toX(t);
-      if (x < p.x || x > p.x + p.w) continue;
-      ctx.strokeStyle = '#8a8fa5';
-      ctx.beginPath(); ctx.moveTo(x, p.y + p.h); ctx.lineTo(x, p.y + p.h + 3); ctx.stroke();
-      ctx.fillText(t.toFixed(3), x, p.y + p.h + 5);
-    }
-    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
-    for (const v of niceTicks(r.vMin, r.vMax, 6)) {
-      const y = toY(v);
-      if (y < p.y || y > p.y + p.h) continue;
-      ctx.strokeStyle = '#8a8fa5';
-      ctx.beginPath(); ctx.moveTo(p.x - 3, y); ctx.lineTo(p.x, y); ctx.stroke();
-      ctx.fillText(v.toFixed(3), p.x - 5, y);
-    }
-    // Title
-    ctx.fillStyle = '#8a8fa5';
-    ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-    ctx.fillText(
-      `zoom: τ ∈ [${r.tauMin.toFixed(3)}, ${r.tauMax.toFixed(3)}],  v ∈ [${r.vMin.toFixed(3)}, ${r.vMax.toFixed(3)}]`,
-      this.PAD_L, 8,
-    );
-    // Colour bar
-    if (this.showGrid && this.tauStars) this.drawColorBar(ctx, cw, ch);
-  }
 }
 
 // Cyclic τ bounding-arc: find the largest gap and return the complement.
