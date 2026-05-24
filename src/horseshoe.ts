@@ -1,4 +1,4 @@
-import { HorseshoeCanvas, type SectorRect, type PolygonPoint, type ZoomRegion } from './horseshoeCanvas';
+import { HorseshoeCanvas, type SectorRect, type PolygonPoint, type ViewRect } from './horseshoeCanvas';
 import { HorseshoeZoom, type ZoomRange } from './horseshoeZoom';
 import HorseshoeWorker from './horseshoe-worker?worker';
 import type {
@@ -324,15 +324,15 @@ $('toggle-image').addEventListener('click', () => {
 
 // ---------- Zoom tool + view history (left panel only) ----------
 
-const viewHistory: (ZoomRegion | null)[] = [null]; // [0] = full polar view
+const viewHistory: (ViewRect | null)[] = [null]; // [0] = full polar view
 let viewIdx = 0;
 let zoomToolActive = false;
 
 function applyView(): void {
-  canvas.setZoomRegion(viewHistory[viewIdx]);
+  canvas.setViewRect(viewHistory[viewIdx]);
   updateZoomButtons();
 }
-function pushView(region: ZoomRegion | null): void {
+function pushView(region: ViewRect | null): void {
   // Browser-style truncation: drop forward history beyond current index.
   viewHistory.length = viewIdx + 1;
   viewHistory.push(region);

@@ -21,11 +21,13 @@ export interface PolygonPoint {
   escaped: boolean;
 }
 
-// A zoom view region in (τ, v) coordinates. May extend outside [0, 1) on
-// τ (continuous representation when straddling the seam).
-export interface ZoomRegion {
-  tauMin: number; tauMax: number;
-  vMin: number;   vMax: number;
+// Viewport rectangle in NATURAL canvas pixel coordinates (the rectangle of
+// the un-zoomed render that should fill the visible canvas). All drawing
+// happens in natural coords; we apply a scale+translate transform so the
+// selected rectangle stretches to fill the visible canvas.
+export interface ViewRect {
+  x: number; y: number;
+  w: number; h: number;
 }
 
 export class HorseshoeCanvas {
@@ -59,14 +61,17 @@ export class HorseshoeCanvas {
   private showGrid = true;
   private showImage = false;
 
-  // ----- zoom-mode state -----
-  // When zoomRegion is set, the canvas renders the data as a Cartesian-
-  // stretched view of that (τ, v) rectangle instead of as a polar disc.
-  private zoomRegion: ZoomRegion | null = null;
+  // ----- viewport-zoom state -----
+  // Viewport zoom is a pure pixel-space magnification: when viewRect is
+  // set, only the natural canvas pixels in that rectangle are visible,
+  // stretched (no aspect lock) to fill the canvas via a 2D transform.
+  // All drawing code stays in natural canvas coords; the transform is
+  // applied once at the start of the draw.
+  private viewRect: ViewRect | null = null;
   private zoomToolActive = false;
   private dragStart: { x: number; y: number } | null = null;
   private dragEnd: { x: number; y: number } | null = null;
-  onZoomBoxDrawn: ((region: ZoomRegion) => void) | null = null;
+  onZoomBoxDrawn: ((rect: ViewRect) => void) | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -83,12 +88,11 @@ export class HorseshoeCanvas {
 
   // ----- zoom-mode API -----
 
-  setZoomRegion(r: ZoomRegion | null): void {
-    this.zoomRegion = r;
-    this.offValid = false;       // re-rasterise heatmap for new mapping
+  setViewRect(r: ViewRect | null): void {
+    this.viewRect = r;
     this.draw();
   }
-  getZoomRegion(): ZoomRegion | null { return this.zoomRegion; }
+  getViewRect(): ViewRect | null { return this.viewRect; }
   setZoomToolActive(on: boolean): void {
     this.zoomToolActive = on;
     this.canvas.style.cursor = on ? 'crosshair' : '';
@@ -122,8 +126,8 @@ export class HorseshoeCanvas {
     const start = this.dragStart;
     this.dragStart = null;
     this.dragEnd = null;
-    const region = this.computeZoomRegion(start, end);
-    if (region && this.onZoomBoxDrawn) this.onZoomBoxDrawn(region);
+    const rect = this.computeViewRect(start, end);
+    if (rect && this.onZoomBoxDrawn) this.onZoomBoxDrawn(rect);
     this.draw();
   }
   private onMouseLeave(): void {
@@ -134,65 +138,34 @@ export class HorseshoeCanvas {
     }
   }
 
-  // ----- screen ↔ (τ, v) conversion (depends on current view mode) -----
+  // ----- screen ↔ natural canvas conversion (for viewport zoom) -----
 
-  private polarGeom(): { cx: number; cy: number; R: number } {
+  // Map a screen pixel (relative to canvas top-left) to natural canvas
+  // pixel — i.e. into the coordinate system used by all draw code.
+  private screenToNatural(sx: number, sy: number): { x: number; y: number } {
+    if (!this.viewRect) return { x: sx, y: sy };
     const w = this.canvas.clientWidth;
     const h = this.canvas.clientHeight;
+    const r = this.viewRect;
     return {
-      cx: w / 2,
-      cy: h / 2,
-      R: Math.max(0, Math.min(w, h) / 2 - 28),
+      x: r.x + (sx / Math.max(1, w)) * r.w,
+      y: r.y + (sy / Math.max(1, h)) * r.h,
     };
   }
-  private screenToTauV(x: number, y: number): { tau: number; v: number } | null {
-    const { cx, cy, R } = this.polarGeom();
-    if (R <= 0) return null;
-    const dx = x - cx, dy = y - cy;
-    const rad = Math.hypot(dx, dy);
-    if (rad > R) return null;
-    let ang = Math.atan2(dy, dx) + Math.PI / 2;
-    ang = ((ang % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
-    if (this.zoomRegion) {
-      // Polar-stretched: the visible disc represents the zoom (τ, v) range.
-      const r = this.zoomRegion;
-      const tau = r.tauMin + (ang / (2 * Math.PI)) * (r.tauMax - r.tauMin);
-      const v = r.vMin + (rad / R) * (r.vMax - r.vMin);
-      return { tau, v };
-    }
-    let tau = ang / (2 * Math.PI);
-    tau = tau - Math.floor(tau);
-    const v = (rad / R) * this.vMax;
-    return { tau, v };
-  }
 
-  // Bounding box of (τ, v) values from the 4 corners of the screen rectangle.
-  // Handles τ wraparound by finding the largest cyclic gap and bounding the
-  // complement.
-  private computeZoomRegion(
+  // Pixel rectangle in NATURAL coords that corresponds to a screen drag.
+  private computeViewRect(
     s: { x: number; y: number }, e: { x: number; y: number },
-  ): ZoomRegion | null {
-    const x1 = Math.min(s.x, e.x), x2 = Math.max(s.x, e.x);
-    const y1 = Math.min(s.y, e.y), y2 = Math.max(s.y, e.y);
-    if (x2 - x1 < 4 || y2 - y1 < 4) return null; // ignore tiny drags
-    const corners: Array<[number, number]> = [
-      [x1, y1], [x2, y1], [x1, y2], [x2, y2],
-    ];
-    const taus: number[] = [];
-    const vs: number[] = [];
-    for (const [x, y] of corners) {
-      const tv = this.screenToTauV(x, y);
-      if (tv) { taus.push(tv.tau); vs.push(tv.v); }
-    }
-    if (taus.length === 0 || vs.length === 0) return null;
-    const vMin = Math.min(...vs);
-    const vMax = Math.max(...vs);
-    if (vMax <= vMin) return null;
-    // τ is cyclic in both polar and zoom-stretched modes; pick the bounding
-    // arc by largest-gap complement so a drag straddling the seam works.
-    const b = cyclicTauBounds(taus);
-    if (b.max <= b.min) return null;
-    return { tauMin: b.min, tauMax: b.max, vMin, vMax };
+  ): ViewRect | null {
+    if (Math.abs(e.x - s.x) < 4 || Math.abs(e.y - s.y) < 4) return null;
+    const a = this.screenToNatural(s.x, s.y);
+    const b = this.screenToNatural(e.x, e.y);
+    const x = Math.min(a.x, b.x);
+    const y = Math.min(a.y, b.y);
+    const w = Math.abs(b.x - a.x);
+    const h = Math.abs(b.y - a.y);
+    if (w < 1 || h < 1) return null;
+    return { x, y, w, h };
   }
 
   // ----- grid -----
@@ -339,17 +312,11 @@ export class HorseshoeCanvas {
     if (R <= 0) { this.offValid = true; return; }
 
     const n = this.n;
+    const displayVMax = this.vMax;
     const scanVMax = this.scanVMax;
-    // In zoom mode the visible disc represents the zoom (τ, v) rectangle;
-    // otherwise it represents [0, 1) × [0, displayVMax].
-    const zoom = this.zoomRegion;
-    const tMin = zoom ? zoom.tauMin : 0;
-    const tMax = zoom ? zoom.tauMax : 1;
-    const vMin = zoom ? zoom.vMin   : 0;
-    const vMaxLocal = zoom ? zoom.vMax : this.vMax;
-    const tSpan = tMax - tMin;
-    const vSpan = vMaxLocal - vMin;
-
+    // Per-pixel sampling at NATURAL canvas coords. Viewport zoom is
+    // applied later by the canvas transform; we don't have to know
+    // about it here.
     const imageData = ctx.createImageData(wi, hi);
     const data = imageData.data;
     for (let py = 0; py < hi; py++) {
@@ -358,13 +325,12 @@ export class HorseshoeCanvas {
         const dx = px - cx;
         const rad = Math.hypot(dx, dy);
         if (rad > R) continue;
-        const vDisplay = vMin + (rad / R) * vSpan;
-        if (vDisplay > scanVMax || vDisplay < 0) continue;
-        let ang = Math.atan2(dy, dx) + Math.PI / 2;
-        ang = ((ang % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
-        const tauVis = tMin + (ang / (2 * Math.PI)) * tSpan;
-        const tauMod = ((tauVis % 1) + 1) % 1;
-        const i = Math.min(n - 1, Math.max(0, Math.floor(tauMod * n)));
+        const vDisplay = (rad / R) * displayVMax;
+        if (vDisplay > scanVMax) continue;
+        const ang = Math.atan2(dy, dx) + Math.PI / 2;
+        let tau = ang / (2 * Math.PI);
+        tau = tau - Math.floor(tau);
+        const i = Math.min(n - 1, Math.max(0, Math.floor(tau * n)));
         const j = Math.min(n - 1, Math.max(0, Math.floor((vDisplay / scanVMax) * n)));
         const ts = this.tauStars[j * n + i];
         if (isNaN(ts)) continue;
@@ -411,31 +377,25 @@ export class HorseshoeCanvas {
     ctx.fillStyle = '#06060e';
     ctx.fillRect(0, 0, w, h);
 
+    // Apply viewport-zoom transform: the natural canvas pixels in viewRect
+    // get stretched to fill the visible canvas (no aspect lock).
+    ctx.save();
+    if (this.viewRect) {
+      const r = this.viewRect;
+      ctx.scale(w / r.w, h / r.h);
+      ctx.translate(-r.x, -r.y);
+    }
+
     const cx = w / 2, cy = h / 2;
     const R = Math.max(0, Math.min(w, h) / 2 - 28);
-    if (R <= 0) return;
+    if (R <= 0) { ctx.restore(); return; }
 
-    // Projection setup. In zoom mode the visible (τ, v) rectangle is
-    // stretched to fill the disc: τ → full 2π circle, v → full radius.
-    const zoom = this.zoomRegion;
-    const tMin = zoom ? zoom.tauMin : 0;
-    const tMax = zoom ? zoom.tauMax : 1;
-    const vMin = zoom ? zoom.vMin : 0;
-    const vMaxLocal = zoom ? zoom.vMax : this.vMax;
-    const tSpan = tMax - tMin;
-    const vSpan = vMaxLocal - vMin;
-    const angleOf = (tau: number): number =>
-      ((tau - tMin) / tSpan) * 2 * Math.PI - Math.PI / 2;
-    const radiusOf = (v: number): number => ((v - vMin) / vSpan) * R;
-    // Unwrap τ to the closest representative inside [tMin, tMax], or null
-    // if no shift lands in range. In non-zoom mode all τ are visible.
-    const unwrap = (tau: number): number | null => {
-      if (!zoom) return tau - Math.floor(tau);
-      const k = Math.round(((tMin + tMax) / 2 - tau));
-      const u = tau + k;
-      return (u >= tMin && u <= tMax) ? u : null;
-    };
-    const vIn = (v: number): boolean => v >= vMin && v <= vMaxLocal;
+    // No projection helpers — everything renders in natural canvas coords.
+    // The transform takes care of stretching the visible rectangle.
+    const angleOf = (tau: number): number => tau * 2 * Math.PI - Math.PI / 2;
+    const radiusOf = (v: number): number => (v / this.vMax) * R;
+    const unwrap = (tau: number): number => tau - Math.floor(tau);
+    const vIn = (v: number): boolean => v <= this.vMax;
 
     if (this.showGrid) {
       if (!this.offValid) this.rasterise();
@@ -474,23 +434,18 @@ export class HorseshoeCanvas {
     ctx.lineWidth = 1;
     ctx.font = '10px -apple-system, system-ui, sans-serif';
     ctx.fillStyle = '#556';
-    const ringValues = zoom
-      ? niceTicks(vMin, vMaxLocal, 4)
-      : [vMaxLocal / 4, vMaxLocal / 2, (3 * vMaxLocal) / 4, vMaxLocal];
+    const ringValues = [this.vMax / 4, this.vMax / 2, (3 * this.vMax) / 4, this.vMax];
     for (const val of ringValues) {
       const r = radiusOf(val);
       if (r <= 0 || r > R) continue;
       ctx.beginPath();
       ctx.arc(cx, cy, r, 0, Math.PI * 2);
       ctx.stroke();
-      ctx.fillText(val.toFixed(zoom ? 3 : 2), cx + 3, cy - r - 2);
+      ctx.fillText(val.toFixed(2), cx + 3, cy - r - 2);
     }
     ctx.strokeStyle = '#1a2030';
-    const spokeTaus = zoom
-      ? niceTicks(tMin, tMax, 8)
-      : Array.from({ length: 12 }, (_, m) => m / 12);
-    for (const t of spokeTaus) {
-      const a = angleOf(t);
+    for (let m = 0; m < 12; m++) {
+      const a = angleOf(m / 12);
       ctx.beginPath();
       ctx.moveTo(cx, cy);
       ctx.lineTo(cx + R * Math.cos(a), cy + R * Math.sin(a));
@@ -499,48 +454,33 @@ export class HorseshoeCanvas {
     ctx.fillStyle = '#8a8fa5';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    if (zoom) {
-      for (const t of spokeTaus) {
-        const a = angleOf(t);
-        ctx.fillText(t.toFixed(3), cx + (R + 16) * Math.cos(a), cy + (R + 16) * Math.sin(a));
-      }
-    } else {
-      const months = ['J','F','M','A','M','J','J','A','S','O','N','D'];
-      for (let m = 0; m < 12; m++) {
-        const a = angleOf((m + 0.5) / 12);
-        ctx.fillText(months[m], cx + (R + 14) * Math.cos(a), cy + (R + 14) * Math.sin(a));
-      }
+    const months = ['J','F','M','A','M','J','J','A','S','O','N','D'];
+    for (let m = 0; m < 12; m++) {
+      const a = angleOf((m + 0.5) / 12);
+      ctx.fillText(months[m], cx + (R + 14) * Math.cos(a), cy + (R + 14) * Math.sin(a));
     }
 
-    // Sector overlay (annular wedge in stretched coords).
+    // Sector overlay (annular wedge in natural polar coords).
     if (this.sector) {
       const s = this.sector;
-      const tauSU = unwrap(s.tauS);
-      const tauEU = unwrap(s.tauE);
-      if (tauSU !== null && tauEU !== null) {
-        const rIn  = Math.max(0, Math.min(R, radiusOf(Math.max(vMin, s.vS))));
-        const rOut = Math.max(0, Math.min(R, radiusOf(Math.min(vMaxLocal, s.vE))));
-        if (rOut > rIn) {
-          const aS = angleOf(tauSU);
-          const aE = angleOf(tauEU);
-          ctx.fillStyle = 'rgba(80, 140, 255, 0.35)';
-          ctx.strokeStyle = 'rgba(140, 180, 255, 0.9)';
-          ctx.lineWidth = 1.2;
-          ctx.beginPath();
-          const fromA = aS;
-          const toA = aE > aS ? aE : aE + 2 * Math.PI;
-          ctx.arc(cx, cy, rOut, fromA, toA, false);
-          ctx.arc(cx, cy, rIn, toA, fromA, true);
-          ctx.closePath();
-          ctx.fill();
-          ctx.stroke();
-        }
-      }
+      const rIn = Math.max(0, Math.min(R, radiusOf(s.vS)));
+      const rOut = Math.max(0, Math.min(R, radiusOf(s.vE)));
+      const aS = angleOf(s.tauS);
+      const aE = angleOf(s.tauE);
+      ctx.fillStyle = 'rgba(80, 140, 255, 0.35)';
+      ctx.strokeStyle = 'rgba(140, 180, 255, 0.9)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      const fromA = aS;
+      const toA = aE > aS ? aE : aE + 2 * Math.PI;
+      ctx.arc(cx, cy, rOut, fromA, toA, false);
+      ctx.arc(cx, cy, rIn, toA, fromA, true);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
     }
 
-    // Polygon: closed boundary of φ(R), filled with evenodd so folds
-    // appear as holes. Each node unwrapped relative to its predecessor
-    // for path continuity across the zoom seam.
+    // Polygon
     if (this.polygon && this.polygon.length > 2) {
       ctx.fillStyle = 'rgba(255, 90, 90, 0.22)';
       ctx.strokeStyle = 'rgba(255, 130, 130, 0.9)';
@@ -551,11 +491,10 @@ export class HorseshoeCanvas {
         if (p.escaped || !isFinite(p.tau) || !isFinite(p.v)) {
           started = false; continue;
         }
-        const tu = unwrap(p.tau);
-        if (tu === null || !vIn(p.v)) { started = false; continue; }
+        if (!vIn(p.v)) { started = false; continue; }
         const rad = radiusOf(p.v);
         if (rad < 0 || rad > R) { started = false; continue; }
-        const a = angleOf(tu);
+        const a = angleOf(unwrap(p.tau));
         const x = cx + rad * Math.cos(a);
         const y = cy + rad * Math.sin(a);
         if (started) ctx.lineTo(x, y); else ctx.moveTo(x, y);
@@ -569,11 +508,10 @@ export class HorseshoeCanvas {
     // P markers
     if (this.pPoints.length > 0) {
       for (const p of this.pPoints) {
-        const tu = unwrap(p.tau);
-        if (tu === null || !vIn(p.v)) continue;
+        if (!vIn(p.v)) continue;
         const rad = radiusOf(p.v);
         if (rad < 0 || rad > R + 8) continue;
-        const ang = angleOf(tu);
+        const ang = angleOf(unwrap(p.tau));
         const x = cx + rad * Math.cos(ang);
         const y = cy + rad * Math.sin(ang);
         ctx.fillStyle = '#fff';
@@ -596,14 +534,17 @@ export class HorseshoeCanvas {
       }
     }
 
-    // Title text
+    // End of transformed drawing. Title + colour bar are screen-anchored.
+    ctx.restore();
+
     {
       const lines: string[] = [];
       if (this.showGrid && this.tauStars) lines.push('grid: (τ₀, v₀)  colour = τ*');
       if (this.showImage && this.tauStars) lines.push('image: (τ*, |v*|)  colour = τ₀');
-      if (zoom) lines.push(
-        `zoom: τ∈[${tMin.toFixed(3)}, ${tMax.toFixed(3)}],  v∈[${vMin.toFixed(3)}, ${vMaxLocal.toFixed(3)}]`,
-      );
+      if (this.viewRect) {
+        const r = this.viewRect;
+        lines.push(`zoom: ${(w / r.w).toFixed(2)}× × ${(h / r.h).toFixed(2)}×`);
+      }
       ctx.fillStyle = '#8a8fa5';
       ctx.font = '11px -apple-system, system-ui, sans-serif';
       ctx.textAlign = 'left';
