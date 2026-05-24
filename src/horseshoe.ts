@@ -593,22 +593,37 @@ function consumeSpiralResults(
   }
   const escCount = escIdx; // 0..escCount-1 are non-escape samples
   // Chaos-trim: shoots near the escape boundary are hypersensitive — adjacent
-  // v0 samples can map to wildly different (τ*, v*), making the spiral jump in
-  // screen space. Refinement can't smooth chaos (every midpoint shoot is
-  // random), so we trim both spirals back to where samples are still
-  // continuous. Detection: walk each spiral from k=0 forward and find the
-  // first k where the screen-pixel distance to k-1 exceeds CHAOS_DIST.
-  // Keep [0, that_k). Apply the smaller of the two stable counts to both
-  // spirals so the polygon stays symmetric.
-  const CHAOS_DIST = 3;
+  // v0 samples can map to wildly different (τ*, v*), making the spiral jump
+  // around in screen space. Refinement can't smooth chaos (every midpoint
+  // shoot is random), so we trim both spirals back to where samples are still
+  // continuous.
+  //
+  // Detection has to be RELATIVE because the spiral's segment lengths grow
+  // smoothly as the curve winds outward (outer windings cover more disc per
+  // unit v0). An absolute pixel threshold would cut off the outer windings
+  // even though they're smooth. Instead: walk each spiral forward; declare
+  // chaos at the first k where this segment is much larger than the rolling
+  // median of recent segments. That catches sudden jumps from a smooth
+  // baseline regardless of how that baseline is growing.
+  const WINDOW = 32;
+  const JUMP_FACTOR = 8;
+  const MIN_JUMP_PX = 3;
   const stableCount = (offset: number): number => {
     if (escCount < 2) return escCount;
+    const dists: number[] = new Array(escCount - 1);
     let prev = screenXY(tauStars[offset], vStars[offset]);
     for (let k = 1; k < escCount; k++) {
       const cur = screenXY(tauStars[offset + k], vStars[offset + k]);
-      const d = Math.hypot(cur.x - prev.x, cur.y - prev.y);
-      if (d > CHAOS_DIST) return k;
+      dists[k - 1] = Math.hypot(cur.x - prev.x, cur.y - prev.y);
       prev = cur;
+    }
+    // Rolling median over the last WINDOW segments.
+    for (let k = 1; k < dists.length; k++) {
+      const lo = Math.max(0, k - WINDOW);
+      const recent = dists.slice(lo, k).sort((a, b) => a - b);
+      const med = recent[Math.floor(recent.length / 2)] ?? 0;
+      const threshold = Math.max(JUMP_FACTOR * med, MIN_JUMP_PX);
+      if (dists[k] > threshold) return k + 1; // keep [0, k+1) i.e. through index k? actually we want to stop BEFORE the bad sample
     }
     return escCount;
   };
