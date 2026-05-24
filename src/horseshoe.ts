@@ -935,18 +935,20 @@ function onWorkerMsg(ev: MessageEvent<HorseshoeWorkerToMain>): void {
         consumeEdgeResults(tauStars, vStars, escapes);
       } else if (phase === 'sector-refining') {
         // Reject midpoints that would distort the polygon shape:
-        //   - PERIMETER ratio (distA + distB) / parent > 1.10 means the
-        //     midpoint lies far enough off the line A-B that inserting
-        //     it creates a visible kink in the polygon outline. Tightened
-        //     from 1.25 because even ~37% perpendicular offset shows.
         //   - DOT product test (mid-A) · (B-mid) ≤ 0 means the polygon
-        //     would actually REVERSE direction at the new node — that's
-        //     the "doubling back" pathology that turns a smooth curve
-        //     into a zigzag.
+        //     would actually REVERSE direction at the new node. This is
+        //     the real "doubling back" guard.
+        //   - PERIMETER ratio (distA + distB) / parent > 2.0 is a loose
+        //     sanity bound to reject wild chaotic outliers (a midpoint
+        //     that doubles the polygon's path length is not a smooth
+        //     curve sample). Kept loose so genuine high-curvature arcs
+        //     still get refined.
         //   - Per-sub-gap ratio (sub > CHAOS_RATIO × parent) prevents
-        //     infinite refinement of an asymmetric chaotic side.
-        const OFF_SEGMENT_RATIO = 1.10;
-        const CHAOS_RATIO = 0.75;
+        //     infinite refinement of an asymmetric chaotic side. A
+        //     circular-arc subdivision gives sub/parent ≈ 0.5–0.71, so
+        //     0.95 leaves headroom for legitimate curves.
+        const OFF_SEGMENT_RATIO = 2.0;
+        const CHAOS_RATIO = 0.95;
         for (let i = 0; i < pending.length; i++) {
           const p = pending[i];
           const tau = tauStars[i];
