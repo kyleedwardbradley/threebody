@@ -696,25 +696,25 @@ function consumeEdgeResults(
     `sector image: N=${polygonNodes.length}${nEsc ? `, ${nEsc} escaped` : ''} — click Refine to subdivide`;
 }
 
-// ---------- Refinement: pure adaptive bisection by screen-segment length ----
+// ---------- Refinement: round-based iteration over all segments -----------
 //
-// Each polygon segment (chord between two consecutive nodes in s-order) is
-// kept in a max-heap keyed on its screen length in pixels. Each step pops
-// the longest segment, shoots the parametric midpoint sMid = (sA + sB)/2
-// through the Poincaré map, inserts the resulting (τ*, v*) point into the
-// polygon at s = sMid, and pushes the two sub-gaps if they're still above
-// THRESHOLD_PX. Done when the heap is empty (all gaps below threshold) or
-// the polygon hits refineCap.
+// Each round walks every consecutive polygon-node pair, computes the screen
+// distance, and shoots the parametric midpoint sMid = (sA + sB)/2 of any
+// segment longer than THRESHOLD_PX. All the midpoints from that round come
+// back together and get inserted at their sMid positions; the next round
+// walks the (now denser) polygon. Done when a round finds no segments above
+// threshold, or polygonNodes hits refineCap.
 //
-// There is NO chaos filter, NO dot-product check, NO perimeter check.
-// A midpoint of s always maps to the curve's image at that s; if the chord
-// from A to B happens to skip windings, the inserted midpoint sits on the
-// curve between them in parametric s, even if it's not between them on the
-// screen. That's the true shape of the polygon's image — preserving it is
-// the point of the visualization.
+// No chaos filter, no dot-product check, no truncation. A midpoint of s
+// always maps to the curve's image at that s, so the inserted point belongs
+// in parametric order between its neighbors — even if the chord from A to B
+// happens to skip windings and the screen midpoint sits "outside" the chord.
+// The polygon image is what it is.
 //
 // The only thing we drop is escape: if a midpoint shoot escapes there's no
-// (τ*, v*) to insert, so that single gap can't be subdivided further.
+// (τ*, v*) to insert, so that segment stays as a chord until next round
+// (where it'll be picked up again and re-shot — but the same v0 will escape
+// again, so effectively it's stable).
 
 function startRefinement(): void {
   if (phase !== 'idle') return;
@@ -725,47 +725,53 @@ function startRefinement(): void {
   refineCap = Math.min(50_000, Math.max(2000, 50 * polygonNodes.length));
   ensureWorker();
   phase = 'sector-refining';
-  buildInitialHeap();
-  if (heap.length === 0) {
-    phase = 'idle';
-    killWorker();
-    $('status').textContent =
-      `sector image: N=${polygonNodes.length} — all gaps already ≤ ${THRESHOLD_PX} px`;
-    return;
-  }
   refineStep();
 }
 
 function refineStep(): void {
   if (!worker || phase !== 'sector-refining') return;
   if (polygonNodes.length >= refineCap) { refineDone('cap'); return; }
-  const top = hPeek();
-  if (!top || top.dist <= THRESHOLD_PX) { refineDone('threshold'); return; }
 
-  pending = [];
-  const tau0s: number[] = [];
-  const v0s: number[] = [];
-  const remaining = refineCap - polygonNodes.length;
-  // Batch many shoots per round-trip. The popped top-of-heap entries are
-  // independent (each is its own segment), so they can be shot in parallel.
-  const batchTarget = Math.min(REFINE_BATCH, remaining);
-  while (pending.length < batchTarget) {
-    const g = hPop();
-    if (!g) break;
-    if (g.dist <= THRESHOLD_PX) break;
-    const sMid = 0.5 * (g.sA + g.sB);
+  // Collect every segment that still exceeds the threshold.
+  const candidates: PendingGap[] = [];
+  let longest = 0;
+  const N = polygonNodes.length;
+  for (let i = 0; i < N; i++) {
+    const a = polygonNodes[i];
+    const b = polygonNodes[(i + 1) % N];
+    if (a.escaped || b.escaped) continue;
+    const pa = screenXY(a.tau, a.v);
+    const pb = screenXY(b.tau, b.v);
+    const dist = Math.hypot(pb.x - pa.x, pb.y - pa.y);
+    if (dist <= THRESHOLD_PX) continue;
+    const sBEff = (i === N - 1) ? b.s + 4 : b.s;
+    const sMid = 0.5 * (a.s + sBEff);
     const { tau0, v0 } = boundaryParam(sMid);
-    pending.push({ gap: g, sMid, tau0, v0 });
-    tau0s.push(tau0);
-    v0s.push(v0);
+    candidates.push({
+      gap: { sA: a.s, sB: sBEff, ax: pa.x, ay: pa.y, bx: pb.x, by: pb.y, dist },
+      sMid, tau0, v0,
+    });
+    if (dist > longest) longest = dist;
   }
-  if (pending.length === 0) { refineDone('threshold'); return; }
+  if (candidates.length === 0) { refineDone('threshold'); return; }
+
+  // Respect the cap: if we'd overflow this round, keep only the longest
+  // segments so the remaining budget is spent where it'll show.
+  const remaining = refineCap - polygonNodes.length;
+  if (candidates.length > remaining) {
+    candidates.sort((a, b) => b.gap.dist - a.gap.dist);
+    candidates.length = remaining;
+  }
+
+  pending = candidates;
+  const tau0s = candidates.map((c) => c.tau0);
+  const v0s = candidates.map((c) => c.v0);
   worker.postMessage({
     type: 'shoot',
     req: { e: cfg.e, maxPeriods: cfg.maxPeriods, tau0s, v0s },
   });
   $('status').textContent =
-    `refining sector image… N=${polygonNodes.length}  heap=${heap.length}  longest=${top.dist.toFixed(1)}px`;
+    `refining sector image… N=${polygonNodes.length}  round=${candidates.length}  longest=${longest.toFixed(1)}px`;
 }
 
 function consumeRefineResults(
@@ -773,30 +779,12 @@ function consumeRefineResults(
 ): void {
   for (let i = 0; i < pending.length; i++) {
     const p = pending[i];
-    if (escapes[i] === 1) continue; // can't insert escape; the chord stays as-is
-    const tau = tauStars[i], v = vStars[i];
-    const mid = screenXY(tau, v);
+    if (escapes[i] === 1) continue;
     const sActual = ((p.sMid % 4) + 4) % 4;
     insertSorted({
       s: sActual, tau0: p.tau0, v0: p.v0,
-      tau, v, escaped: false,
+      tau: tauStars[i], v: vStars[i], escaped: false,
     });
-    const distA = Math.hypot(mid.x - p.gap.ax, mid.y - p.gap.ay);
-    const distB = Math.hypot(p.gap.bx - mid.x, p.gap.by - mid.y);
-    if (distA > THRESHOLD_PX) {
-      hPush({
-        sA: p.gap.sA, sB: p.sMid,
-        ax: p.gap.ax, ay: p.gap.ay, bx: mid.x, by: mid.y,
-        dist: distA,
-      });
-    }
-    if (distB > THRESHOLD_PX) {
-      hPush({
-        sA: p.sMid, sB: p.gap.sB,
-        ax: mid.x, ay: mid.y, bx: p.gap.bx, by: p.gap.by,
-        dist: distB,
-      });
-    }
   }
   pending = [];
   throttledRedraw();
