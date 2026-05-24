@@ -934,47 +934,47 @@ function onWorkerMsg(ev: MessageEvent<HorseshoeWorkerToMain>): void {
       } else if (phase === 'sector-edges') {
         consumeEdgeResults(tauStars, vStars, escapes);
       } else if (phase === 'sector-refining') {
-        // For each shot result: decide whether to insert the new node at
-        // all, and whether to push sub-gaps for further refinement. If a
-        // sub-gap is nearly as long as its parent, the boundary is
-        // chaotic at this scale (midpoint shoots into a different basin)
-        // and subdivision can't help.
+        // Reject midpoints that don't lie ON the parent segment. By the
+        // triangle inequality distA + distB ≥ parentDist always, with
+        // equality iff the midpoint is exactly on segment A-B. A large
+        // ratio (distA + distB ≫ parentDist) means the midpoint shoot
+        // landed in a different basin (chaos). Inserting such a mid
+        // would create a triangular spike that disorders the polygon —
+        // discard it entirely instead.
         //
-        // Chaos detection per sub-gap (distX >= CHAOS_RATIO * parent):
-        //   - Skip pushing that sub-gap (no point refining further).
-        //   - If BOTH sub-gaps are chaotic, also skip INSERTING the new
-        //     node — otherwise it adds a spurious zigzag spike to the
-        //     polygon (parent A → far mid → parent B).
+        // Per-sub-gap ratio check prevents infinite refinement of a
+        // single sub-gap that's nearly as long as its parent (the chaos
+        // signature for asymmetric splits).
+        const OFF_SEGMENT_RATIO = 1.25; // sum-vs-parent: > this = chaotic
         const CHAOS_RATIO = 0.75;
         for (let i = 0; i < pending.length; i++) {
           const p = pending[i];
           const tau = tauStars[i];
           const v = vStars[i];
           const esc = escapes[i] === 1;
-          if (esc) continue; // don't pollute polygon with escape NaN nodes
+          if (esc) continue;
           const mid = screenXY(tau, v);
           const parentDist = p.gap.dist;
           const dxA = mid.x - p.gap.ax, dyA = mid.y - p.gap.ay;
           const distA = Math.hypot(dxA, dyA);
           const dxB = p.gap.bx - mid.x, dyB = p.gap.by - mid.y;
           const distB = Math.hypot(dxB, dyB);
-          const chaosA = distA >= CHAOS_RATIO * parentDist;
-          const chaosB = distB >= CHAOS_RATIO * parentDist;
-          if (chaosA && chaosB) continue;  // discard entire shot
+          // Off-segment test: midpoint should lie close to line A-B.
+          if (distA + distB > OFF_SEGMENT_RATIO * parentDist) continue;
           const sActual = ((p.sMid % 4) + 4) % 4;
           const node: PolygonNode = {
             s: sActual, tau0: p.tau0, v0: p.v0,
             tau, v, escaped: false,
           };
           insertSorted(node);
-          if (distA > THRESHOLD_PX && !chaosA) {
+          if (distA > THRESHOLD_PX && distA < CHAOS_RATIO * parentDist) {
             hPush({
               sA: p.gap.sA, sB: p.sMid,
               ax: p.gap.ax, ay: p.gap.ay, bx: mid.x, by: mid.y,
               dist: distA,
             });
           }
-          if (distB > THRESHOLD_PX && !chaosB) {
+          if (distB > THRESHOLD_PX && distB < CHAOS_RATIO * parentDist) {
             hPush({
               sA: p.sMid, sB: p.gap.sB,
               ax: mid.x, ay: mid.y, bx: p.gap.bx, by: p.gap.by,
