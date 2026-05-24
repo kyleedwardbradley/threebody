@@ -215,20 +215,27 @@ export class HorseshoeZoom {
       ctx.lineWidth = 1.2;
       ctx.beginPath();
       let started = false;
+      let prevTau = 0;
       for (const pt of this.polygon) {
         if (pt.escaped || !isFinite(pt.tau) || !isFinite(pt.v)) {
           started = false; continue;
         }
         const x = this.toX(pt.tau);
         const y = this.toY(pt.v);
-        if (started) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+        if (started) {
+          // Detect τ wraparound: the polar canvas connects τ=0.97 → τ=0.03
+          // with a short cyclic chord, but in linear-τ Cartesian that same
+          // step would draw a long horizontal line across the whole plot.
+          // Treat any |Δτ| > 0.5 as a wrap and break the path there.
+          if (Math.abs(pt.tau - prevTau) > 0.5) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        } else {
+          ctx.moveTo(x, y);
+        }
+        prevTau = pt.tau;
         started = true;
       }
-      // Don't closePath — it would draw a chord from the last sub-path's
-      // last point back to its first moveTo, which in Cartesian shows up
-      // as a long diagonal. The polygon already loops because the boundary
-      // walk visits every edge sequentially; the implicit close of the
-      // last-to-first vertex is taken care of by the canvas fill rule.
+      // Don't closePath — implicit chord would also create a spurious line.
       ctx.fill('evenodd');
       ctx.stroke();
       ctx.restore();
