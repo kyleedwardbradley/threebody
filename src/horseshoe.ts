@@ -1,4 +1,4 @@
-import { HorseshoeCanvas, type SectorRect, type PolygonPoint } from './horseshoeCanvas';
+import { HorseshoeCanvas, type SectorRect, type PolygonPoint, type ZoomRegion } from './horseshoeCanvas';
 import { HorseshoeZoom, type ZoomRange } from './horseshoeZoom';
 import HorseshoeWorker from './horseshoe-worker?worker';
 import type {
@@ -321,6 +321,52 @@ $('toggle-image').addEventListener('click', () => {
   applyShowImage(next);
   $('toggle-image').textContent = next ? 'Hide image' : 'Show image';
 });
+
+// ---------- Zoom tool + view history (left panel only) ----------
+
+const viewHistory: (ZoomRegion | null)[] = [null]; // [0] = full polar view
+let viewIdx = 0;
+let zoomToolActive = false;
+
+function applyView(): void {
+  canvas.setZoomRegion(viewHistory[viewIdx]);
+  updateZoomButtons();
+}
+function pushView(region: ZoomRegion | null): void {
+  // Browser-style truncation: drop forward history beyond current index.
+  viewHistory.length = viewIdx + 1;
+  viewHistory.push(region);
+  viewIdx = viewHistory.length - 1;
+  applyView();
+}
+function goHome(): void { pushView(null); }
+function goBack(): void { if (viewIdx > 0) { viewIdx--; applyView(); } }
+function goForward(): void {
+  if (viewIdx < viewHistory.length - 1) { viewIdx++; applyView(); }
+}
+function updateZoomButtons(): void {
+  $<HTMLButtonElement>('zoom-back').disabled = viewIdx === 0;
+  $<HTMLButtonElement>('zoom-fwd').disabled  = viewIdx === viewHistory.length - 1;
+  $<HTMLButtonElement>('zoom-home').disabled = viewHistory[viewIdx] === null;
+  $<HTMLButtonElement>('zoom-tool').classList.toggle('active', zoomToolActive);
+}
+
+$('zoom-tool').addEventListener('click', () => {
+  zoomToolActive = !zoomToolActive;
+  canvas.setZoomToolActive(zoomToolActive);
+  updateZoomButtons();
+});
+$('zoom-home').addEventListener('click', goHome);
+$('zoom-back').addEventListener('click', goBack);
+$('zoom-fwd').addEventListener('click', goForward);
+
+canvas.onZoomBoxDrawn = (region) => {
+  pushView(region);
+  zoomToolActive = false;
+  canvas.setZoomToolActive(false);
+  updateZoomButtons();
+};
+
 $('run-sector').addEventListener('click', () => runSector());
 $('refine-sector').addEventListener('click', () => startRefinement());
 $('reset').addEventListener('click', () => {
@@ -773,3 +819,4 @@ readQuery();
 updateTabLinks();
 canvas.setVMax(cfg.vMax);
 updateSectorDisplay();
+updateZoomButtons();
