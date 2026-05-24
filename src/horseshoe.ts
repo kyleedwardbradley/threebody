@@ -604,22 +604,27 @@ function consumeSpiralResults(
   // self-intersecting polygon as one shape).
   const leftSpiral: PolygonPoint[] = [];
   const rightSpiral: PolygonPoint[] = [];
-  // Left spiral (edge 0, s ∈ [0, 1)).
+  // Left spiral (edge 0, s ∈ [0, 1]). Spans the full edge from vS at s=0
+  // to vUpper at s=1 with even s spacing 1/(validCount-1). The s=1 node
+  // is the top-left corner — the top edge will later add a duplicate node
+  // at s=1 with identical (tau0, v0), which is harmless.
   for (let k = 0; k < validCount; k++) {
     const v0 = cfg.vS + (cfg.vE - cfg.vS) * (k / (K - 1));
-    const s = validCount <= 1 ? 0 : k / validCount;
+    const s = validCount <= 1 ? 0 : k / (validCount - 1);
     polygonNodes.push({
       s, tau0: tauStart(), v0,
       tau: tauStars[k], v: vStars[k], escaped: false,
     });
     leftSpiral.push({ tau: tauStars[k], v: vStars[k], escaped: false });
   }
-  // Right spiral (edge 2, s ∈ [2, 3)) — walks effVE → vS in boundary order,
+  // Right spiral (edge 2, s ∈ [2, 3]). Walks effVE → vS in boundary order,
   // so node k of the walk corresponds to input index (validCount - 1 - k).
+  // Spacing 1/(validCount-1) so s=2 is the top-right corner and s=3 is the
+  // bottom-right corner — both shared with adjacent edges.
   for (let k = 0; k < validCount; k++) {
     const inputIdx = validCount - 1 - k;
     const v0 = cfg.vS + (cfg.vE - cfg.vS) * (inputIdx / (K - 1));
-    const s = validCount <= 1 ? 2 : 2 + k / validCount;
+    const s = validCount <= 1 ? 2 : 2 + k / (validCount - 1);
     polygonNodes.push({
       s, tau0: tauEnd(), v0,
       tau: tauStars[K + inputIdx], v: vStars[K + inputIdx],
@@ -665,10 +670,11 @@ function consumeEdgeResults(
   tauStars: Float32Array, vStars: Float32Array, escapes: Uint8Array,
 ): void {
   const K = edgeKtau;
-  // Top edge (s ∈ [1, 2)).
+  // Top edge (s ∈ [1, 2]). Spacing 1/(K-1) so s=1 and s=2 are the corners
+  // shared with the left and right spirals respectively.
   for (let k = 0; k < K; k++) {
     const t = K === 1 ? 0.5 : k / (K - 1);
-    const s = 1 + k / K; // strictly < 2
+    const s = K === 1 ? 1.5 : 1 + k / (K - 1);
     polygonNodes.push({
       s,
       tau0: tauStart() + (tauEnd() - tauStart()) * t, v0: effVE,
@@ -676,10 +682,12 @@ function consumeEdgeResults(
       escaped: escapes[k] === 1,
     });
   }
-  // Bottom edge (s ∈ [3, 4)).
+  // Bottom edge (s ∈ [3, 4]). s=3 is the bottom-right corner (shared with
+  // right spiral); s=4 ≡ s=0 (mod 4) is the bottom-left corner (shared with
+  // left spiral, but at the wrap seam).
   for (let k = 0; k < K; k++) {
     const t = K === 1 ? 0.5 : k / (K - 1);
-    const s = 3 + k / K;
+    const s = K === 1 ? 3.5 : 3 + k / (K - 1);
     polygonNodes.push({
       s,
       tau0: tauEnd() + (tauStart() - tauEnd()) * t, v0: cfg.vS,
