@@ -40,17 +40,17 @@
 }
 
 :root[data-theme="light"] {
-  --bg:                  #f5f5f7;
+  --bg:                  #ffffff;
   --bg-panel:            #ffffff;
-  --bg-canvas:           #fbfbfd;
-  --bg-canvas-outer:     #eceef2;
+  --bg-canvas:           #ffffff;
+  --bg-canvas-outer:     #ffffff;
   --bg-input:            #ffffff;
-  --bg-input-focus:      #e8eef8;
+  --bg-input-focus:      #eaf0fa;
   --bg-button:           #ffffff;
-  --bg-button-hover:     #eef0f4;
+  --bg-button-hover:     #f0f2f6;
   --bg-button-active:    #d6e6ff;
   --bg-button-active-ring:#7aa7da;
-  --bg-tab:              #ededf2;
+  --bg-tab:              #ffffff;
   --text-primary:        #1a1a22;
   --text-secondary:      #14365f;
   --text-muted:          #5a5e6e;
