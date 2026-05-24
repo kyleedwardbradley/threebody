@@ -203,15 +203,19 @@ export class HorseshoeZoom {
       ctx.stroke();
     }
 
-    // Polygon: closed boundary of φ(R), filled with evenodd rule so folds
-    // become visible as holes.
+    // Polygon outline only — no fill in the zoom view. The polygon's
+    // boundary is one continuous loop in (τ*, v*), but a narrow Cartesian
+    // τ window cuts it into many sub-paths (one per "wind" of the curve
+    // through the visible strip). Canvas's evenodd fill would implicitly
+    // close each sub-path with a chord back to its start, producing many
+    // spurious triangular regions. Stroking only avoids this entirely and
+    // shows exactly the polygon outline.
     if (this.polygon && this.polygon.length > 2) {
       ctx.save();
       ctx.beginPath();
       ctx.rect(p.x, p.y, p.w, p.h);
       ctx.clip();
-      ctx.fillStyle = 'rgba(255, 90, 90, 0.22)';
-      ctx.strokeStyle = 'rgba(255, 130, 130, 0.9)';
+      ctx.strokeStyle = 'rgba(255, 130, 130, 0.95)';
       ctx.lineWidth = 1.2;
       ctx.beginPath();
       let started = false;
@@ -223,10 +227,8 @@ export class HorseshoeZoom {
         const x = this.toX(pt.tau);
         const y = this.toY(pt.v);
         if (started) {
-          // Detect τ wraparound: the polar canvas connects τ=0.97 → τ=0.03
-          // with a short cyclic chord, but in linear-τ Cartesian that same
-          // step would draw a long horizontal line across the whole plot.
-          // Treat any |Δτ| > 0.5 as a wrap and break the path there.
+          // Break on apparent τ wrap (polar canvas would render the short
+          // cyclic chord; linear Cartesian would render a long horizontal).
           if (Math.abs(pt.tau - prevTau) > 0.5) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
         } else {
@@ -235,8 +237,6 @@ export class HorseshoeZoom {
         prevTau = pt.tau;
         started = true;
       }
-      // Don't closePath — implicit chord would also create a spurious line.
-      ctx.fill('evenodd');
       ctx.stroke();
       ctx.restore();
     }
