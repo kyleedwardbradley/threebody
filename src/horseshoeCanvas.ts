@@ -63,6 +63,10 @@ export class HorseshoeCanvas {
   private spiralRight: PolygonPoint[] | null = null;
   // P points: where ∂D₀ ∩ ∂D₁ on a symmetry line (Moser's P).
   private pPoints: { tau: number; v: number; label?: string }[] = [];
+  // Boundary of D₀: sorted by τ, points {τ, v_esc(τ)}. ∂D₁ is rendered as
+  // the reflection (τ, v) → (-τ mod 1, v) per Moser's Lemma 2.
+  private boundaryD0: { tau: number; v: number }[] | null = null;
+  private showBoundaries = true;
   private showGrid = true;
   private showImage = false;
 
@@ -225,6 +229,12 @@ export class HorseshoeCanvas {
     this.pPoints = pts;
     this.draw();
   }
+  setBoundaryD0(pts: { tau: number; v: number }[] | null): void {
+    this.boundaryD0 = pts;
+    this.draw();
+  }
+  setShowBoundaries(on: boolean): void { this.showBoundaries = on; this.draw(); }
+  getShowBoundaries(): boolean { return this.showBoundaries; }
   setVMax(v: number): void {
     if (!isFinite(v) || v <= 0) return;
     this.vMax = v;
@@ -607,6 +617,32 @@ export class HorseshoeCanvas {
       ctx.closePath();
       ctx.fill('evenodd');
       ctx.stroke();
+    }
+
+    // ∂D₀ (yellow) and ∂D₁ (green) boundary curves. ∂D₁ = ρ(∂D₀) where
+    // ρ is the time-reversal (τ, v) → (-τ mod 1, v) (Moser's Lemma 2).
+    if (this.showBoundaries && this.boundaryD0 && this.boundaryD0.length > 1) {
+      const pts = this.boundaryD0;
+      const drawCurve = (color: string, tauMap: (t: number) => number) => {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = lw(1.5);
+        ctx.beginPath();
+        let started = false;
+        for (let i = 0; i <= pts.length; i++) {
+          const p = pts[i % pts.length];
+          if (!isFinite(p.v) || !vIn(p.v)) { started = false; continue; }
+          const rad = radiusOf(p.v);
+          if (rad < 0 || rad > R) { started = false; continue; }
+          const a = angleOf(unwrap(tauMap(p.tau)));
+          const x = cx + rad * Math.cos(a);
+          const y = cy + rad * Math.sin(a);
+          if (started) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+          started = true;
+        }
+        ctx.stroke();
+      };
+      drawCurve('#ffd24a', (t) => t);           // ∂D₀
+      drawCurve('#5fd07a', (t) => -t);          // ∂D₁ = reflection
     }
 
     // P markers

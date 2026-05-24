@@ -87,8 +87,24 @@ type Phase = 'idle' | 'grid'
   | 'finding-p'        // bisecting on the symmetry-line v_esc
   | 'sector-spirals'   // shooting the two τ-spirals at matched v
   | 'sector-edges'     // shooting top + bottom connectors at the effective vE
-  | 'sector-refining'; // priority-queue refinement on the closed boundary
+  | 'sector-refining'  // priority-queue refinement on the closed boundary
+  | 'boundary-initial' // initial K-sample ∂D₀ bisection
+  | 'boundary-refining'; // adaptive refinement of ∂D₀ at screen scale
 let phase: Phase = 'idle';
+
+// ---------- ∂D₀ / ∂D₁ boundary ----------
+
+interface D0Point { tau: number; vEsc: number; }
+interface D0Gap { tauA: number; vA: number; tauB: number; vB: number; dist: number; }
+
+const d0Points: D0Point[] = [];   // sorted by tau ∈ [0, 1)
+const d0Heap: D0Gap[] = [];       // max-heap on screen dist
+let d0Pending: { tauMid: number; gap: D0Gap }[] = [];
+const D0_INITIAL_K = 64;
+const D0_BATCH = 8;
+const D0_CAP = 5000;
+const D0_THRESHOLD = 1;           // visual pixels
+const D0_BISECT_STEPS = 18;
 
 // Effective vE — clamped down from cfg.vE if either τ-spiral escapes
 // before reaching cfg.vE. Polygon and overlay both use this.
@@ -338,6 +354,12 @@ $('toggle-image').addEventListener('click', () => {
   applyShowImage(next);
   $('toggle-image').textContent = next ? 'Hide image' : 'Show image';
 });
+$('run-boundaries').addEventListener('click', () => runBoundaries());
+$('toggle-boundaries').addEventListener('click', () => {
+  const next = !canvas.getShowBoundaries();
+  canvas.setShowBoundaries(next);
+  $('toggle-boundaries').textContent = next ? 'Hide boundaries' : 'Show boundaries';
+});
 
 // ---------- Zoom tool + view history (left panel only) ----------
 
@@ -392,6 +414,10 @@ $('reset').addEventListener('click', () => {
   applyPolygon(null);
   applySpiralPair(null, null);
   applyPPoints([]);
+  canvas.setBoundaryD0(null);
+  d0Points.length = 0;
+  d0Heap.length = 0;
+  d0Pending = [];
   polygonNodes.length = 0;
   heap.length = 0;
   pending = [];
@@ -447,6 +473,10 @@ function invalidateAll(): void {
   invalidateGrid();
   invalidatePolygon();
   applyPPoints([]);  // P depends on e and maxPeriods
+  d0Points.length = 0;
+  d0Heap.length = 0;
+  d0Pending = [];
+  canvas.setBoundaryD0(null);
 }
 
 function stopAll(): void {
@@ -702,6 +732,137 @@ function refineDone(reason: 'threshold' | 'cap' | 'stopped'): void {
   $('status').textContent = `sector image done.  N=${polygonNodes.length}${tag}`;
 }
 
+// ---------- ∂D₀ boundary computation + adaptive refinement ----------
+
+function runBoundaries(): void {
+  if (phase !== 'idle') return;
+  d0Points.length = 0;
+  d0Heap.length = 0;
+  d0Pending = [];
+  canvas.setBoundaryD0(null);
+  const tau0s = Array.from({ length: D0_INITIAL_K }, (_, i) => i / D0_INITIAL_K);
+  ensureWorker().postMessage({
+    type: 'findEscape',
+    req: { e: cfg.e, maxPeriods: cfg.maxPeriods, tau0s, steps: D0_BISECT_STEPS },
+  } as HorseshoeMainToWorker);
+  phase = 'boundary-initial';
+  $('status').textContent = `computing ∂D₀… ${D0_INITIAL_K} initial bisections`;
+}
+
+function pushD0Gap(a: D0Point, b: D0Point): void {
+  const pa = screenXY(a.tau, a.vEsc);
+  const pb = screenXY(b.tau, b.vEsc);
+  const dist = Math.hypot(pb.x - pa.x, pb.y - pa.y);
+  if (dist <= D0_THRESHOLD) return;
+  d0Heap.push({ tauA: a.tau, vA: a.vEsc, tauB: b.tau, vB: b.vEsc, dist });
+  let k = d0Heap.length - 1;
+  while (k > 0) {
+    const p = (k - 1) >>> 1;
+    if (d0Heap[p].dist >= d0Heap[k].dist) break;
+    [d0Heap[p], d0Heap[k]] = [d0Heap[k], d0Heap[p]];
+    k = p;
+  }
+}
+function popD0Gap(): D0Gap | undefined {
+  if (d0Heap.length === 0) return undefined;
+  const top = d0Heap[0];
+  const last = d0Heap.pop()!;
+  if (d0Heap.length > 0) {
+    d0Heap[0] = last;
+    let k = 0;
+    for (;;) {
+      const l = 2 * k + 1, r = l + 1;
+      let m = k;
+      if (l < d0Heap.length && d0Heap[l].dist > d0Heap[m].dist) m = l;
+      if (r < d0Heap.length && d0Heap[r].dist > d0Heap[m].dist) m = r;
+      if (m === k) break;
+      [d0Heap[m], d0Heap[k]] = [d0Heap[k], d0Heap[m]];
+      k = m;
+    }
+  }
+  return top;
+}
+function insertD0Sorted(pt: D0Point): void {
+  let lo = 0, hi = d0Points.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (d0Points[mid].tau < pt.tau) lo = mid + 1;
+    else hi = mid;
+  }
+  d0Points.splice(lo, 0, pt);
+}
+function applyBoundary(): void {
+  canvas.setBoundaryD0(d0Points.map((p) => ({ tau: p.tau, v: p.vEsc })));
+}
+
+function consumeBoundaryInitial(vEscs: Float32Array): void {
+  d0Points.length = 0;
+  for (let i = 0; i < D0_INITIAL_K; i++) {
+    const v = vEscs[i];
+    if (isFinite(v)) d0Points.push({ tau: i / D0_INITIAL_K, vEsc: v });
+  }
+  // Build initial heap (cyclic adjacency)
+  d0Heap.length = 0;
+  const n = d0Points.length;
+  for (let i = 0; i < n; i++) {
+    pushD0Gap(d0Points[i], d0Points[(i + 1) % n]);
+  }
+  applyBoundary();
+  if (d0Heap.length === 0) { boundariesDone('threshold'); return; }
+  phase = 'boundary-refining';
+  boundaryRefineStep();
+}
+
+function boundaryRefineStep(): void {
+  if (phase !== 'boundary-refining' || !worker) return;
+  if (d0Points.length >= D0_CAP) { boundariesDone('cap'); return; }
+  if (d0Heap.length === 0) { boundariesDone('threshold'); return; }
+  d0Pending = [];
+  const tau0s: number[] = [];
+  while (d0Pending.length < D0_BATCH) {
+    const g = popD0Gap();
+    if (!g) break;
+    if (g.dist <= D0_THRESHOLD) break;
+    // midpoint τ with wrap handling
+    let tauMid: number;
+    if (g.tauB > g.tauA) tauMid = (g.tauA + g.tauB) / 2;
+    else { tauMid = (g.tauA + g.tauB + 1) / 2; if (tauMid >= 1) tauMid -= 1; }
+    d0Pending.push({ tauMid, gap: g });
+    tau0s.push(tauMid);
+  }
+  if (tau0s.length === 0) { boundariesDone('threshold'); return; }
+  worker.postMessage({
+    type: 'findEscape',
+    req: { e: cfg.e, maxPeriods: cfg.maxPeriods, tau0s, steps: D0_BISECT_STEPS },
+  } as HorseshoeMainToWorker);
+  const longest = d0Pending[0]?.gap.dist ?? 0;
+  $('status').textContent =
+    `refining ∂D₀… N=${d0Points.length}  longest=${longest.toFixed(1)}px`;
+}
+
+function consumeBoundaryRefinement(vEscs: Float32Array): void {
+  for (let i = 0; i < d0Pending.length; i++) {
+    const p = d0Pending[i];
+    const v = vEscs[i];
+    if (!isFinite(v)) continue;
+    const newPt: D0Point = { tau: p.tauMid, vEsc: v };
+    insertD0Sorted(newPt);
+    pushD0Gap({ tau: p.gap.tauA, vEsc: p.gap.vA }, newPt);
+    pushD0Gap(newPt, { tau: p.gap.tauB, vEsc: p.gap.vB });
+  }
+  d0Pending = [];
+  applyBoundary();
+  boundaryRefineStep();
+}
+
+function boundariesDone(reason: 'threshold' | 'cap' | 'stopped'): void {
+  phase = 'idle';
+  killWorker();
+  const tag = reason === 'cap' ? ` (hit ${D0_CAP}-pt cap)` :
+              reason === 'stopped' ? ' (stopped)' : '';
+  $('status').textContent = `∂D₀ done.  N=${d0Points.length}${tag}`;
+}
+
 function onWorkerMsg(ev: MessageEvent<HorseshoeWorkerToMain>): void {
   const m = ev.data;
   switch (m.type) {
@@ -723,18 +884,23 @@ function onWorkerMsg(ev: MessageEvent<HorseshoeWorkerToMain>): void {
         `grid done (${cfg.n}×${cfg.n} = ${cfg.n * cfg.n} cells).  Finding P…`;
       break;
     case 'escapeFound': {
-      if (phase !== 'finding-p') break;
-      const labels = ['P_a', 'P_p'];
-      const pts: { tau: number; v: number; label?: string }[] = [];
-      for (let i = 0; i < m.vEscs.length; i++) {
-        const v = m.vEscs[i];
-        if (isFinite(v)) pts.push({ tau: i === 0 ? 0 : 0.5, v, label: labels[i] });
+      if (phase === 'finding-p') {
+        const labels = ['P_a', 'P_p'];
+        const pts: { tau: number; v: number; label?: string }[] = [];
+        for (let i = 0; i < m.vEscs.length; i++) {
+          const v = m.vEscs[i];
+          if (isFinite(v)) pts.push({ tau: i === 0 ? 0 : 0.5, v, label: labels[i] });
+        }
+        applyPPoints(pts);
+        killWorker();
+        phase = 'idle';
+        const parts = pts.map((p) => `${p.label}=v_esc(${p.tau.toFixed(1)})=${p.v.toFixed(3)}`);
+        $('status').textContent = `grid done.  ${parts.join('  ')}`;
+      } else if (phase === 'boundary-initial') {
+        consumeBoundaryInitial(m.vEscs);
+      } else if (phase === 'boundary-refining') {
+        consumeBoundaryRefinement(m.vEscs);
       }
-      applyPPoints(pts);
-      killWorker();
-      phase = 'idle';
-      const parts = pts.map((p) => `${p.label}=v_esc(${p.tau.toFixed(1)})=${p.v.toFixed(3)}`);
-      $('status').textContent = `grid done.  ${parts.join('  ')}`;
       break;
     }
     case 'shotResults': {
