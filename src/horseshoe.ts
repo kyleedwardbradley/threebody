@@ -591,7 +591,37 @@ function consumeSpiralResults(
       'sector image: every spiral sample escaped — lower vS, narrow τ range, or pick a smaller sector';
     return;
   }
-  const validCount = escIdx; // 0..validCount-1 are valid
+  const escCount = escIdx; // 0..escCount-1 are non-escape samples
+  // Chaos-trim: shoots near the escape boundary are hypersensitive — adjacent
+  // v0 samples can map to wildly different (τ*, v*), making the spiral jump in
+  // screen space. Refinement can't smooth chaos (every midpoint shoot is
+  // random), so we trim both spirals back to where samples are still
+  // continuous. Detection: walk each spiral from k=0 forward and find the
+  // first k where the screen-pixel distance to k-1 exceeds CHAOS_DIST.
+  // Keep [0, that_k). Apply the smaller of the two stable counts to both
+  // spirals so the polygon stays symmetric.
+  const CHAOS_DIST = 3;
+  const stableCount = (offset: number): number => {
+    if (escCount < 2) return escCount;
+    let prev = screenXY(tauStars[offset], vStars[offset]);
+    for (let k = 1; k < escCount; k++) {
+      const cur = screenXY(tauStars[offset + k], vStars[offset + k]);
+      const d = Math.hypot(cur.x - prev.x, cur.y - prev.y);
+      if (d > CHAOS_DIST) return k;
+      prev = cur;
+    }
+    return escCount;
+  };
+  const leftStable = stableCount(0);
+  const rightStable = stableCount(K);
+  const validCount = Math.min(leftStable, rightStable);
+  if (validCount === 0) {
+    phase = 'idle';
+    killWorker();
+    $('status').textContent =
+      'sector image: spirals chaotic from the start — narrow τ range or lower vS';
+    return;
+  }
   effVE = (K === 1)
     ? cfg.vS
     : cfg.vS + (cfg.vE - cfg.vS) * (validCount - 1) / (K - 1);
@@ -934,19 +964,14 @@ function onWorkerMsg(ev: MessageEvent<HorseshoeWorkerToMain>): void {
       } else if (phase === 'sector-edges') {
         consumeEdgeResults(tauStars, vStars, escapes);
       } else if (phase === 'sector-refining') {
-        // Reject midpoints that would distort the polygon shape:
-        //   - DOT product test (mid-A) · (B-mid) ≤ 0 means the polygon
-        //     would actually REVERSE direction at the new node. This is
-        //     the real "doubling back" guard.
-        //   - PERIMETER ratio (distA + distB) / parent > 2.0 is a loose
-        //     sanity bound to reject wild chaotic outliers (a midpoint
-        //     that doubles the polygon's path length is not a smooth
-        //     curve sample). Kept loose so genuine high-curvature arcs
-        //     still get refined.
-        //   - Per-sub-gap ratio (sub > CHAOS_RATIO × parent) prevents
-        //     infinite refinement of an asymmetric chaotic side. A
-        //     circular-arc subdivision gives sub/parent ≈ 0.5–0.71, so
-        //     0.95 leaves headroom for legitimate curves.
+        // Two checks gate midpoint insertion:
+        //   - PERIMETER ratio (distA + distB) / parent > 2.0 means the
+        //     midpoint is so far off the chord that the inserted polygon
+        //     would have to take a detour twice the chord's length. That's
+        //     a chaos outlier, not a smooth arc sample. Skip it.
+        //   - Per-sub-gap ratio (sub < CHAOS_RATIO × parent) on push: only
+        //     re-queue sub-gaps that meaningfully shrunk. Sub-gaps near
+        //     the parent's size signal chaos that won't converge.
         const OFF_SEGMENT_RATIO = 2.0;
         const CHAOS_RATIO = 0.95;
         for (let i = 0; i < pending.length; i++) {
@@ -961,8 +986,13 @@ function onWorkerMsg(ev: MessageEvent<HorseshoeWorkerToMain>): void {
           const distA = Math.hypot(dxA, dyA);
           const dxB = p.gap.bx - mid.x, dyB = p.gap.by - mid.y;
           const distB = Math.hypot(dxB, dyB);
+          // Perimeter check is the only outlier guard: if the midpoint shoot
+          // returns a point so far off the chord that (|A→mid| + |mid→B|)
+          // doubles the chord length, it's chaos — skip it. No dot-product
+          // check: in tight-winding regions the midpoint of v0 doesn't equal
+          // the geometric midpoint of the screen arc, so legitimate samples
+          // can have dxA·dxB ≤ 0 even when they're real points on the curve.
           if (distA + distB > OFF_SEGMENT_RATIO * parentDist) continue;
-          if (dxA * dxB + dyA * dyB <= 0) continue;  // anti-doubling
           const sActual = ((p.sMid % 4) + 4) % 4;
           const node: PolygonNode = {
             s: sActual, tau0: p.tau0, v0: p.v0,
