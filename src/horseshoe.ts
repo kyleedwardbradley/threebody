@@ -876,16 +876,9 @@ function consumeBoundaryInitial(vEscs: Float32Array): void {
     const v = vEscs[i];
     if (isFinite(v)) d0Points.push({ tau: i / D0_INITIAL_K, vEsc: v });
   }
-  // Build initial heap (cyclic adjacency)
   d0Heap.length = 0;
-  const n = d0Points.length;
-  for (let i = 0; i < n; i++) {
-    pushD0Gap(d0Points[i], d0Points[(i + 1) % n]);
-  }
   applyBoundary();
-  if (d0Heap.length === 0) { boundariesDone('threshold'); return; }
-  phase = 'boundary-refining';
-  boundaryRefineStep();
+  boundariesDone('threshold');
 }
 
 function boundaryRefineStep(): void {
