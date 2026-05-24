@@ -203,43 +203,14 @@ export class HorseshoeZoom {
       ctx.stroke();
     }
 
-    // Fill the area between the two spirals as a sequence of small quads
-    // (one per matched (v_k, v_{k+1}) row). See HorseshoeCanvas for rationale.
-    if (this.spiralLeft && this.spiralRight) {
-      const L = this.spiralLeft, Rr = this.spiralRight;
-      const K = Math.min(L.length, Rr.length);
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(p.x, p.y, p.w, p.h);
-      ctx.clip();
-      const xy = (pt: PolygonPoint): { x: number; y: number } | null => {
-        if (pt.escaped || !isFinite(pt.tau) || !isFinite(pt.v)) return null;
-        return { x: this.toX(pt.tau), y: this.toY(pt.v) };
-      };
-      ctx.fillStyle = 'rgba(255, 90, 90, 0.12)';
-      for (let k = 0; k < K - 1; k++) {
-        const a = xy(L[k]);
-        const b = xy(L[k + 1]);
-        const c = xy(Rr[k + 1]);
-        const d = xy(Rr[k]);
-        if (!a || !b || !c || !d) continue;
-        ctx.beginPath();
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-        ctx.lineTo(c.x, c.y);
-        ctx.lineTo(d.x, d.y);
-        ctx.closePath();
-        ctx.fill();
-      }
-      ctx.restore();
-    }
-
-    // Polygon outline (no fill).
+    // Polygon: closed boundary of φ(R), filled with evenodd rule so folds
+    // become visible as holes.
     if (this.polygon && this.polygon.length > 2) {
       ctx.save();
       ctx.beginPath();
       ctx.rect(p.x, p.y, p.w, p.h);
       ctx.clip();
+      ctx.fillStyle = 'rgba(255, 90, 90, 0.22)';
       ctx.strokeStyle = 'rgba(255, 130, 130, 0.9)';
       ctx.lineWidth = 1.2;
       ctx.beginPath();
@@ -252,6 +223,7 @@ export class HorseshoeZoom {
         started = true;
       }
       ctx.closePath();
+      ctx.fill('evenodd');
       ctx.stroke();
       ctx.restore();
     }

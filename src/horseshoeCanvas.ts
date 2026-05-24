@@ -395,40 +395,11 @@ export class HorseshoeCanvas {
     // Cyclic colour-bar legend (top right) when grid is visible.
     if (this.showGrid && this.tauStars) this.drawColorBar(ctx, w, h);
 
-    // Fill the area between the two spirals as a sequence of small quads.
-    // Each quad spans one (τs, v_k → v_{k+1}) × (τe, v_k → v_{k+1}) cell of
-    // the input rectangle, so it's small and well-behaved even when the
-    // full polygon self-intersects. Translucency stacks at fold-overs.
-    if (this.spiralLeft && this.spiralRight) {
-      const L = this.spiralLeft, Rr = this.spiralRight;
-      const K = Math.min(L.length, Rr.length);
-      const polarXY = (p: PolygonPoint): { x: number; y: number } | null => {
-        if (p.escaped || !isFinite(p.tau) || !isFinite(p.v)) return null;
-        const rad = (p.v / this.vMax) * R;
-        if (rad < 0 || rad > R) return null;
-        const a = angleForTau(p.tau);
-        return { x: cx + rad * Math.cos(a), y: cy + rad * Math.sin(a) };
-      };
-      ctx.fillStyle = 'rgba(255, 90, 90, 0.12)';
-      for (let k = 0; k < K - 1; k++) {
-        const a = polarXY(L[k]);
-        const b = polarXY(L[k + 1]);
-        const c = polarXY(Rr[k + 1]);
-        const d = polarXY(Rr[k]);
-        if (!a || !b || !c || !d) continue;
-        ctx.beginPath();
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-        ctx.lineTo(c.x, c.y);
-        ctx.lineTo(d.x, d.y);
-        ctx.closePath();
-        ctx.fill();
-      }
-    }
-
-    // Polygon outline (no fill — quads cover that). Stroke through the full
-    // boundary loop so the user can still see the polygon's edge.
+    // Polygon: closed boundary of φ(R), filled with evenodd rule so folds
+    // (which wind the curve twice) become visible as holes rather than
+    // being covered up by uniform fill.
     if (this.polygon && this.polygon.length > 2) {
+      ctx.fillStyle = 'rgba(255, 90, 90, 0.22)';
       ctx.strokeStyle = 'rgba(255, 130, 130, 0.9)';
       ctx.lineWidth = 1.2;
       ctx.beginPath();
@@ -446,6 +417,7 @@ export class HorseshoeCanvas {
         started = true;
       }
       ctx.closePath();
+      ctx.fill('evenodd');
       ctx.stroke();
     }
   }
