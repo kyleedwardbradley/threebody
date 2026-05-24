@@ -216,13 +216,19 @@ export class HorseshoeZoom {
       ctx.beginPath();
       let started = false;
       for (const pt of this.polygon) {
-        if (pt.escaped || !isFinite(pt.tau) || !isFinite(pt.v)) { continue; }
+        if (pt.escaped || !isFinite(pt.tau) || !isFinite(pt.v)) {
+          started = false; continue;
+        }
         const x = this.toX(pt.tau);
         const y = this.toY(pt.v);
         if (started) ctx.lineTo(x, y); else ctx.moveTo(x, y);
         started = true;
       }
-      ctx.closePath();
+      // Don't closePath — it would draw a chord from the last sub-path's
+      // last point back to its first moveTo, which in Cartesian shows up
+      // as a long diagonal. The polygon already loops because the boundary
+      // walk visits every edge sequentially; the implicit close of the
+      // last-to-first vertex is taken care of by the canvas fill rule.
       ctx.fill('evenodd');
       ctx.stroke();
       ctx.restore();
