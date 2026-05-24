@@ -1,5 +1,8 @@
+import { initTheme, mountThemeToggle } from './theme';
+initTheme();
 import { SweepPolar, type SweepPlotMode, type SweepColorMode } from './sweepPolar';
 import SweepWorker from './sweep-worker?worker';
+mountThemeToggle();
 import type {
   SweepMainToWorker,
   SweepWorkerToMain,

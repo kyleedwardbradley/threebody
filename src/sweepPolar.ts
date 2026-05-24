@@ -1,4 +1,5 @@
 import type { SweepResult, RadiusSource } from './types';
+import { getPalette, onThemeChange } from './theme';
 
 export type SweepPlotMode = 'scatter' | 'line';
 export type SweepColorMode = 'v0' | 'time';
@@ -28,6 +29,7 @@ export class SweepPolar {
     this.resize();
     const ro = new ResizeObserver(() => this.resize());
     ro.observe(canvas);
+    onThemeChange(() => this.draw());
   }
 
   clear(): void {
@@ -116,8 +118,9 @@ export class SweepPolar {
     const ctx = this.ctx;
     const w = this.canvas.clientWidth;
     const h = this.canvas.clientHeight;
+    const pal = getPalette();
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = '#06060e';
+    ctx.fillStyle = pal.bgCanvasOuter;
     ctx.fillRect(0, 0, w, h);
 
     const cx = w / 2;
@@ -131,10 +134,10 @@ export class SweepPolar {
     const range = rMax - rMin;
 
     // Rings
-    ctx.strokeStyle = '#1e2638';
+    ctx.strokeStyle = pal.gridLineStrong;
     ctx.lineWidth = 1;
     ctx.font = '10px -apple-system, system-ui, sans-serif';
-    ctx.fillStyle = '#556';
+    ctx.fillStyle = pal.textMuted;
     const rings = 4;
     for (let i = 1; i <= rings; i++) {
       const r = (R * i) / rings;
@@ -146,7 +149,7 @@ export class SweepPolar {
     }
 
     // Month spokes + labels
-    ctx.strokeStyle = '#1a2030';
+    ctx.strokeStyle = pal.gridLine;
     for (let m = 0; m < 12; m++) {
       const a = angleForTau(m / 12);
       ctx.beginPath();
@@ -154,7 +157,7 @@ export class SweepPolar {
       ctx.lineTo(cx + R * Math.cos(a), cy + R * Math.sin(a));
       ctx.stroke();
     }
-    ctx.fillStyle = '#8a8fa5';
+    ctx.fillStyle = pal.textMuted;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     const months = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
@@ -170,7 +173,7 @@ export class SweepPolar {
     // escape dots don't get pushed to a separate ring).
     const Resc = R * 1.05;
     if (isV0) {
-      ctx.strokeStyle = '#3a1a2a';
+      ctx.strokeStyle = pal.colorEscape;
       ctx.setLineDash([3, 3]);
       ctx.beginPath();
       ctx.arc(cx, cy, Resc, 0, Math.PI * 2);
@@ -184,7 +187,7 @@ export class SweepPolar {
     if (this.mode === 'line') {
       const maxSeg = 0.10 * 2 * R;
       const maxSeg2 = maxSeg * maxSeg;
-      ctx.strokeStyle = '#3a5070';
+      ctx.strokeStyle = pal.gridLineStrong;
       ctx.lineWidth = 1;
       ctx.beginPath();
       let prevX = 0, prevY = 0;
@@ -221,7 +224,7 @@ export class SweepPolar {
         const a = angleForTau(p.tau);
         const x = cx + Resc * Math.cos(a);
         const y = cy + Resc * Math.sin(a);
-        ctx.fillStyle = '#ff3a6a';
+        ctx.fillStyle = pal.colorEscape;
         ctx.beginPath();
         ctx.arc(x, y, escDot, 0, Math.PI * 2);
         ctx.fill();
@@ -246,7 +249,7 @@ export class SweepPolar {
       ctx.fill();
     }
 
-    ctx.fillStyle = '#8a8fa5';
+    ctx.fillStyle = pal.textMuted;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     ctx.fillText(`N = ${this.points.length}`, 10, 8);
@@ -255,7 +258,7 @@ export class SweepPolar {
     }
     if (this.label) {
       ctx.textAlign = 'right';
-      ctx.fillStyle = '#8a8fa5';
+      ctx.fillStyle = pal.textMuted;
       ctx.fillText(this.label, w - 10, 8);
     }
   }

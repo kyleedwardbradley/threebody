@@ -1,5 +1,26 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { getPalette, onThemeChange } from './theme';
+
+function cssToHex(css: string, fallback: number): number {
+  // Accept '#rgb', '#rrggbb', or 'rgb(r,g,b)' — sufficient for our palette.
+  const c = css.trim();
+  if (c.startsWith('#')) {
+    const hex = c.slice(1);
+    if (hex.length === 3) {
+      const r = parseInt(hex[0] + hex[0], 16);
+      const g = parseInt(hex[1] + hex[1], 16);
+      const b = parseInt(hex[2] + hex[2], 16);
+      return (r << 16) | (g << 8) | b;
+    }
+    if (hex.length === 6) return parseInt(hex, 16);
+  }
+  const m = c.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+  if (m) {
+    return (parseInt(m[1], 10) << 16) | (parseInt(m[2], 10) << 8) | parseInt(m[3], 10);
+  }
+  return fallback;
+}
 
 const TRAIL_CAPACITY = 4096;         // absolute buffer upper bound
 const TRAIL_BASE_RGB = [0.4, 1.0, 0.6] as const; // newest-point color
@@ -47,7 +68,10 @@ export class View3D {
     this.container = container;
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x06060e);
+    this.scene.background = new THREE.Color(cssToHex(getPalette().bgCanvasOuter, 0x06060e));
+    onThemeChange(() => {
+      this.scene.background = new THREE.Color(cssToHex(getPalette().bgCanvasOuter, 0x06060e));
+    });
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(window.devicePixelRatio || 1);

@@ -2,6 +2,8 @@
 // whenever the orbital phase τ passes a fixed value (we default to τ = 0,
 // mutual apogee — the convention used in Hevia & Rañada 1996).
 
+import { getPalette, onThemeChange } from './theme';
+
 export interface PhasePoint { z: number; v: number; }
 
 export class PhasePlot {
@@ -19,6 +21,7 @@ export class PhasePlot {
     this.resize();
     const ro = new ResizeObserver(() => this.resize());
     ro.observe(canvas);
+    onThemeChange(() => this.draw());
   }
 
   clear(): void {
@@ -58,8 +61,9 @@ export class PhasePlot {
     const ctx = this.ctx;
     const w = this.canvas.clientWidth;
     const h = this.canvas.clientHeight;
+    const pal = getPalette();
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = '#06060e';
+    ctx.fillStyle = pal.bgCanvasOuter;
     ctx.fillRect(0, 0, w, h);
 
     const pad = { l: 34, r: 14, t: 10, b: 22 };
@@ -84,12 +88,12 @@ export class PhasePlot {
     const yOf = (v: number) => pad.t + plotH * (0.5 - 0.5 * (v / vExt!));
 
     // Frame
-    ctx.strokeStyle = '#1e2638';
+    ctx.strokeStyle = pal.gridLineStrong;
     ctx.lineWidth = 1;
     ctx.strokeRect(pad.l, pad.t, plotW, plotH);
 
     // Axes (z = 0, v = 0)
-    ctx.strokeStyle = '#2a3348';
+    ctx.strokeStyle = pal.plotBorder;
     ctx.beginPath();
     ctx.moveTo(pad.l, pad.t + plotH / 2);
     ctx.lineTo(pad.l + plotW, pad.t + plotH / 2);
@@ -98,7 +102,7 @@ export class PhasePlot {
     ctx.stroke();
 
     // Labels
-    ctx.fillStyle = '#8a8fa5';
+    ctx.fillStyle = pal.textMuted;
     ctx.font = '10px -apple-system, system-ui, sans-serif';
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'right';
@@ -113,8 +117,9 @@ export class PhasePlot {
     ctx.textAlign = 'left';
     ctx.fillText(`z, z'   N = ${this.points.length}`, pad.l + 4, pad.t + 2);
 
-    // Points (drop off-frame)
-    ctx.fillStyle = '#ffd080';
+    // Points (drop off-frame). Use a colour that stands out against both
+    // dark and light backgrounds via the theme palette.
+    ctx.fillStyle = pal.colorDn;
     for (const p of this.points) {
       if (Math.abs(p.z) > zExt || Math.abs(p.v) > vExt) continue;
       const x = xOf(p.z);

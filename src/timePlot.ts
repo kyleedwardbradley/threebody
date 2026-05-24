@@ -2,6 +2,8 @@
 // draws the most recent `capacity` as a polyline with t on the x-axis
 // (in units of the orbital period T = 2π) and z on the y-axis.
 
+import { getPalette, onThemeChange } from './theme';
+
 const CAPACITY = 4096;
 
 export class TimePlot {
@@ -21,6 +23,7 @@ export class TimePlot {
     this.resize();
     const ro = new ResizeObserver(() => this.resize());
     ro.observe(canvas);
+    onThemeChange(() => this.draw());
   }
 
   clear(): void {
@@ -64,8 +67,9 @@ export class TimePlot {
     const ctx = this.ctx;
     const w = this.canvas.clientWidth;
     const h = this.canvas.clientHeight;
+    const pal = getPalette();
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = '#06060e';
+    ctx.fillStyle = pal.bgCanvasOuter;
     ctx.fillRect(0, 0, w, h);
 
     const pad = { l: 34, r: 14, t: 10, b: 22 };
@@ -94,19 +98,19 @@ export class TimePlot {
     const yOf = (z: number) => pad.t + plotH * (0.5 - 0.5 * (z / zMax));
 
     // Axes box
-    ctx.strokeStyle = '#1e2638';
+    ctx.strokeStyle = pal.gridLineStrong;
     ctx.lineWidth = 1;
     ctx.strokeRect(pad.l, pad.t, plotW, plotH);
 
     // z = 0 midline
-    ctx.strokeStyle = '#2a3348';
+    ctx.strokeStyle = pal.plotBorder;
     ctx.beginPath();
     ctx.moveTo(pad.l, pad.t + plotH / 2);
     ctx.lineTo(pad.l + plotW, pad.t + plotH / 2);
     ctx.stroke();
 
     // y gridlines at ±zMax/2
-    ctx.strokeStyle = '#141a28';
+    ctx.strokeStyle = pal.gridLine;
     for (const zLine of [zMax / 2, -zMax / 2]) {
       ctx.beginPath();
       const y = yOf(zLine);
@@ -118,7 +122,7 @@ export class TimePlot {
     // vertical gridlines at each integer period within window
     const pFirst = Math.ceil(tMin / T);
     const pLast  = Math.floor(tMax / T);
-    ctx.strokeStyle = '#141a28';
+    ctx.strokeStyle = pal.gridLine;
     for (let p = pFirst; p <= pLast; p++) {
       const x = xOf(p * T);
       ctx.beginPath();
@@ -128,7 +132,7 @@ export class TimePlot {
     }
 
     // Axis labels
-    ctx.fillStyle = '#8a8fa5';
+    ctx.fillStyle = pal.textMuted;
     ctx.font = '10px -apple-system, system-ui, sans-serif';
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'right';
@@ -143,7 +147,7 @@ export class TimePlot {
 
     // The curve
     if (this.count >= 2) {
-      ctx.strokeStyle = '#88ffaa';
+      ctx.strokeStyle = pal.colorUp;
       ctx.lineWidth = 1.25;
       ctx.beginPath();
       for (let k = 0; k < this.count; k++) {

@@ -1,8 +1,11 @@
+import { initTheme, mountThemeToggle } from './theme';
+initTheme();
 import { View3D } from './view3d';
 import { PolarPlot } from './polarPlot';
 import { TimePlot } from './timePlot';
 import { PhasePlot } from './phasePlot';
 import { bodyState } from './physics/kepler';
+mountThemeToggle();
 import SimWorker from './worker?worker';
 import {
   FAST_SPEED,
