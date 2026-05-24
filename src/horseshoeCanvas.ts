@@ -380,11 +380,18 @@ export class HorseshoeCanvas {
     // Apply viewport-zoom transform: the natural canvas pixels in viewRect
     // get stretched to fill the visible canvas (no aspect lock).
     ctx.save();
+    let sx = 1, sy = 1;
     if (this.viewRect) {
       const r = this.viewRect;
-      ctx.scale(w / r.w, h / r.h);
+      sx = w / r.w; sy = h / r.h;
+      ctx.scale(sx, sy);
       ctx.translate(-r.x, -r.y);
     }
+    // Divide pixel-fixed quantities (line widths, marker radii) by this so
+    // they keep a roughly constant visual size regardless of zoom factor.
+    // Geometric mean is the right average for non-uniform scaling.
+    const lineScale = Math.sqrt(sx * sy);
+    const lw = (px: number) => px / lineScale;
 
     const cx = w / 2, cy = h / 2;
     const R = Math.max(0, Math.min(w, h) / 2 - 28);
@@ -422,7 +429,7 @@ export class HorseshoeCanvas {
           const [r0, g0, b0] = cyclicColor(tau0);
           ctx.fillStyle = `rgba(${r0},${g0},${b0},0.55)`;
           ctx.beginPath();
-          ctx.arc(x, y, 1.4, 0, Math.PI * 2);
+          ctx.arc(x, y, lw(1.4), 0, Math.PI * 2);
           ctx.fill();
         }
       }
@@ -431,7 +438,7 @@ export class HorseshoeCanvas {
     // Rings + spokes. In zoom mode use niceTicks on the zoomed ranges
     // and number labels on spokes; in polar mode use the months scheme.
     ctx.strokeStyle = '#1e2638';
-    ctx.lineWidth = 1;
+    ctx.lineWidth = lw(1);
     ctx.font = '10px -apple-system, system-ui, sans-serif';
     ctx.fillStyle = '#556';
     const ringValues = [this.vMax / 4, this.vMax / 2, (3 * this.vMax) / 4, this.vMax];
@@ -469,7 +476,7 @@ export class HorseshoeCanvas {
       const aE = angleOf(s.tauE);
       ctx.fillStyle = 'rgba(80, 140, 255, 0.35)';
       ctx.strokeStyle = 'rgba(140, 180, 255, 0.9)';
-      ctx.lineWidth = 1.2;
+      ctx.lineWidth = lw(1.2);
       ctx.beginPath();
       const fromA = aS;
       const toA = aE > aS ? aE : aE + 2 * Math.PI;
@@ -484,7 +491,7 @@ export class HorseshoeCanvas {
     if (this.polygon && this.polygon.length > 2) {
       ctx.fillStyle = 'rgba(255, 90, 90, 0.22)';
       ctx.strokeStyle = 'rgba(255, 130, 130, 0.9)';
-      ctx.lineWidth = 1.2;
+      ctx.lineWidth = lw(1.2);
       ctx.beginPath();
       let started = false;
       for (const p of this.polygon) {
@@ -516,9 +523,9 @@ export class HorseshoeCanvas {
         const y = cy + rad * Math.sin(ang);
         ctx.fillStyle = '#fff';
         ctx.strokeStyle = '#000';
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = lw(1.5);
         ctx.beginPath();
-        ctx.arc(x, y, 5, 0, Math.PI * 2);
+        ctx.arc(x, y, lw(5), 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
         ctx.fillStyle = '#fff';
@@ -526,11 +533,11 @@ export class HorseshoeCanvas {
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
         ctx.strokeStyle = '#000';
-        ctx.lineWidth = 3;
+        ctx.lineWidth = lw(3);
         const label = p.label ?? 'P';
         ctx.strokeText(label, x + 8, y);
         ctx.fillText(label, x + 8, y);
-        ctx.lineWidth = 1;
+        ctx.lineWidth = lw(1);
       }
     }
 
