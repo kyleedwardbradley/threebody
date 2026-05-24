@@ -143,7 +143,6 @@ let pending: PendingGap[] = [];
 // remaining segment first (no batch can outrun a sub-gap created mid-batch).
 const REFINE_BATCH = 64;
 const THRESHOLD_PX = 1;
-let refineCap = 50_000;
 let lastRedrawAt = 0;
 const REDRAW_INTERVAL_MS = 30;
 
@@ -479,6 +478,7 @@ function invalidatePolygon(): void {
   applyPolygon(null);
   applySpiralPair(null, null);
   updateSectorDisplay();
+  updateRefineButton();
   if (hadPolygon) $('status').textContent = 'sector image cleared (parameters changed)';
 }
 
@@ -519,6 +519,7 @@ function stopAll(): void {
     phase = 'idle';
   }
   pending = [];
+  updateRefineButton();
 }
 
 function runGrid(): void {
@@ -552,7 +553,6 @@ function runSector(): void {
 
   const K = Math.max(4, Math.round(cfg.k));
   spiralK = K;
-  refineCap = Math.min(50_000, Math.max(2000, 50 * 4 * K));
 
   // Shoot 2K samples: K at τ=tauS, K at τ=tauE, both at matched v values
   // from vS to cfg.vE.
@@ -703,7 +703,8 @@ function consumeEdgeResults(
 // segment longer than THRESHOLD_PX. All the midpoints from that round come
 // back together and get inserted at their sMid positions; the next round
 // walks the (now denser) polygon. Done when a round finds no segments above
-// threshold, or polygonNodes hits refineCap.
+// threshold, or when the user clicks the Refine button (which is labelled
+// "Cancel" while refinement is running).
 //
 // No chaos filter, no dot-product check, no truncation. A midpoint of s
 // always maps to the curve's image at that s, so the inserted point belongs
@@ -717,20 +718,25 @@ function consumeEdgeResults(
 // again, so effectively it's stable).
 
 function startRefinement(): void {
+  if (phase === 'sector-refining') { stopAll(); return; }
   if (phase !== 'idle') return;
   if (polygonNodes.length < 2) {
     $('status').textContent = 'no sector image to refine — compute one first';
     return;
   }
-  refineCap = Math.min(50_000, Math.max(2000, 50 * polygonNodes.length));
   ensureWorker();
   phase = 'sector-refining';
+  updateRefineButton();
   refineStep();
+}
+
+function updateRefineButton(): void {
+  const btn = $<HTMLButtonElement>('refine-sector');
+  btn.textContent = phase === 'sector-refining' ? 'Cancel' : 'Refine';
 }
 
 function refineStep(): void {
   if (!worker || phase !== 'sector-refining') return;
-  if (polygonNodes.length >= refineCap) { refineDone('cap'); return; }
 
   // Collect every segment that still exceeds the threshold.
   const candidates: PendingGap[] = [];
@@ -754,14 +760,6 @@ function refineStep(): void {
     if (dist > longest) longest = dist;
   }
   if (candidates.length === 0) { refineDone('threshold'); return; }
-
-  // Respect the cap: if we'd overflow this round, keep only the longest
-  // segments so the remaining budget is spent where it'll show.
-  const remaining = refineCap - polygonNodes.length;
-  if (candidates.length > remaining) {
-    candidates.sort((a, b) => b.gap.dist - a.gap.dist);
-    candidates.length = remaining;
-  }
 
   pending = candidates;
   const tau0s = candidates.map((c) => c.tau0);
@@ -791,13 +789,13 @@ function consumeRefineResults(
   refineStep();
 }
 
-function refineDone(reason: 'threshold' | 'cap' | 'stopped'): void {
+function refineDone(reason: 'threshold' | 'stopped'): void {
   phase = 'idle';
   pending = [];
   redrawPolygon();
   killWorker();
-  const tag = reason === 'cap' ? ` (hit ${refineCap}-pt cap)` :
-              reason === 'stopped' ? ' (stopped)' : '';
+  updateRefineButton();
+  const tag = reason === 'stopped' ? ' (stopped)' : '';
   $('status').textContent = `sector image done.  N=${polygonNodes.length}${tag}`;
 }
 
