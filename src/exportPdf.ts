@@ -1,89 +1,68 @@
-// In-app "Export PDF" button. Captures the registered canvases via
-// canvas.toDataURL('image/png') and embeds each on its own PDF page
-// (US Letter, landscape, image scaled to fit with margin and a header
-// label). The page's entry calls registerExport() with a getter that
-// returns the panels in display order, and mountExportButton() places
-// the button in the shared tab bar.
+// Per-panel "Export PDF" button. Each panel's container gets a small
+// floating button in its top-right corner; clicking it exports just
+// that panel as a one-page PDF (US Letter, landscape, image scaled to
+// fit with margin and a header label).
 //
-// jsPDF is lazy-imported on the first click so it doesn't bloat the
-// initial page load.
+// jsPDF is dynamic-imported on the first click so it doesn't bloat
+// the initial page load.
 
-export interface ExportPanel {
-  canvas: HTMLCanvasElement;
-  label?: string;
-}
-
-let panelProvider: (() => ExportPanel[]) | null = null;
-let filenameStem = 'figure';
-
-export function registerExport(getPanels: () => ExportPanel[], filename: string): void {
-  panelProvider = getPanels;
-  filenameStem = filename;
+export interface PanelExportConfig {
+  // The container element that holds the canvas. Must be position:
+  // relative (or absolute) so the floating button lays out correctly.
+  container: HTMLElement;
+  // Resolves the canvas to capture at the moment of export. A function
+  // (not a static ref) so callers can re-render before snapshot — e.g.
+  // View3D.getCanvas() forces a WebGL render so toDataURL is populated.
+  getCanvas: () => HTMLCanvasElement;
+  // Human-readable header printed at the top of the PDF page.
+  label: string;
+  // Filename stem (no extension). The current date-time is appended.
+  filename: string;
 }
 
 function dateStamp(): string {
   const d = new Date();
   const pad = (n: number) => n.toString().padStart(2, '0');
-  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`
+       + `-${pad(d.getHours())}${pad(d.getMinutes())}`;
 }
 
-function safeDataUrl(canvas: HTMLCanvasElement): string | null {
-  // WebGL canvases need preserveDrawingBuffer:true at context creation time
-  // for toDataURL to return a populated image. The plain 2D canvases we use
-  // always work.
-  try {
-    return canvas.toDataURL('image/png');
-  } catch {
-    return null;
-  }
-}
-
-export async function exportPdf(): Promise<void> {
-  if (!panelProvider) return;
-  const panels = panelProvider().filter((p) => p.canvas.width > 0 && p.canvas.height > 0);
-  if (panels.length === 0) return;
+async function exportPanel(cfg: PanelExportConfig): Promise<void> {
+  const canvas = cfg.getCanvas();
+  if (canvas.width === 0 || canvas.height === 0) return;
+  let data: string;
+  try { data = canvas.toDataURL('image/png'); } catch { return; }
 
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
-  const pageW = pdf.internal.pageSize.getWidth();   // 792 pt
-  const pageH = pdf.internal.pageSize.getHeight();  // 612 pt
+  const pageW = pdf.internal.pageSize.getWidth();
+  const pageH = pdf.internal.pageSize.getHeight();
   const margin = 36;
   const labelGap = 18;
 
-  panels.forEach((p, i) => {
-    if (i > 0) pdf.addPage();
-    const data = safeDataUrl(p.canvas);
-    if (!data) return;
-    const cw = p.canvas.width;
-    const ch = p.canvas.height;
-    const availW = pageW - 2 * margin;
-    const availH = pageH - 2 * margin - (p.label ? labelGap : 0);
-    const scale = Math.min(availW / cw, availH / ch);
-    const w = cw * scale;
-    const h = ch * scale;
-    const x = (pageW - w) / 2;
-    const y = (pageH - h) / 2 + (p.label ? labelGap / 2 : 0);
-    if (p.label) {
-      pdf.setFontSize(11);
-      pdf.text(p.label, pageW / 2, margin + 9, { align: 'center' });
-    }
-    pdf.addImage(data, 'PNG', x, y, w, h);
-  });
+  const cw = canvas.width;
+  const ch = canvas.height;
+  const availW = pageW - 2 * margin;
+  const availH = pageH - 2 * margin - labelGap;
+  const scale = Math.min(availW / cw, availH / ch);
+  const w = cw * scale;
+  const h = ch * scale;
+  const x = (pageW - w) / 2;
+  const y = (pageH - h) / 2 + labelGap / 2;
 
-  pdf.save(`${filenameStem}-${dateStamp()}.pdf`);
+  pdf.setFontSize(11);
+  pdf.text(cfg.label, pageW / 2, margin + 9, { align: 'center' });
+  pdf.addImage(data, 'PNG', x, y, w, h);
+  pdf.save(`${cfg.filename}-${dateStamp()}.pdf`);
 }
 
-export function mountExportButton(): void {
-  const bar = document.querySelector('.tab-bar');
-  if (!bar) return;
-  if (bar.querySelector('.export-pdf')) return;
+export function mountPanelExport(cfg: PanelExportConfig): void {
+  if (cfg.container.querySelector(':scope > .panel-export-pdf')) return;
   const btn = document.createElement('button');
-  btn.className = 'export-pdf';
+  btn.className = 'panel-export-pdf';
   btn.type = 'button';
   btn.textContent = '⬇ PDF';
-  btn.title = 'Export panels as PDF';
-  btn.addEventListener('click', () => { void exportPdf(); });
-  const toggle = bar.querySelector('.theme-toggle');
-  if (toggle) bar.insertBefore(btn, toggle);
-  else bar.appendChild(btn);
+  btn.title = `Export "${cfg.label}" as PDF`;
+  btn.addEventListener('click', () => { void exportPanel(cfg); });
+  cfg.container.appendChild(btn);
 }

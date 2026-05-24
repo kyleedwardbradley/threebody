@@ -1,9 +1,8 @@
 import { initTheme, mountThemeToggle } from './theme';
-import { registerExport, mountExportButton } from './exportPdf';
+import { mountPanelExport } from './exportPdf';
 initTheme();
 import { SweepPolar, type SweepPlotMode, type SweepColorMode } from './sweepPolar';
 import SweepWorker from './sweep-worker?worker';
-mountExportButton();
 mountThemeToggle();
 import type {
   SweepMainToWorker,
@@ -17,10 +16,18 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
 
 const polarDomain = new SweepPolar($<HTMLCanvasElement>('polar-canvas-domain'));
 const polarCodomain = new SweepPolar($<HTMLCanvasElement>('polar-canvas-codomain'));
-registerExport(() => [
-  { canvas: polarDomain.canvas,   label: 'Domain: τ* vs v₀' },
-  { canvas: polarCodomain.canvas, label: 'Codomain: τ* vs |v*|' },
-], 'velocity-sweep');
+mountPanelExport({
+  container: polarDomain.canvas.parentElement!,
+  getCanvas: () => polarDomain.canvas,
+  label: 'Domain: τ* vs v₀',
+  filename: 'velocity-sweep-domain',
+});
+mountPanelExport({
+  container: polarCodomain.canvas.parentElement!,
+  getCanvas: () => polarCodomain.canvas,
+  label: 'Codomain: τ* vs |v*|',
+  filename: 'velocity-sweep-codomain',
+});
 // Left: (τ*, v₀) — angle = return phase, radius = initial velocity.
 polarDomain.setLabel('τ* vs v₀');
 polarDomain.setRadiusSource('v0');

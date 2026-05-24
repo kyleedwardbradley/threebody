@@ -1,10 +1,9 @@
 import { initTheme, mountThemeToggle } from './theme';
-import { registerExport, mountExportButton } from './exportPdf';
+import { mountPanelExport } from './exportPdf';
 initTheme();
 import { HorseshoeCanvas, type SectorRect, type PolygonPoint, type ViewRect } from './horseshoeCanvas';
 import { HorseshoeZoom, type ZoomRange } from './horseshoeZoom';
 import HorseshoeWorker from './horseshoe-worker?worker';
-mountExportButton();
 mountThemeToggle();
 import type {
   HorseshoeMainToWorker,
@@ -16,10 +15,18 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
 
 const canvas = new HorseshoeCanvas($<HTMLCanvasElement>('horseshoe-canvas'));
 const zoom = new HorseshoeZoom($<HTMLCanvasElement>('horseshoe-zoom'));
-registerExport(() => [
-  { canvas: canvas.canvas, label: 'Horseshoe: polar disc' },
-  { canvas: zoom.canvas,   label: 'Cartesian zoom around sector' },
-], 'horseshoe');
+mountPanelExport({
+  container: canvas.canvas.parentElement!,
+  getCanvas: () => canvas.canvas,
+  label: 'Horseshoe: polar disc',
+  filename: 'horseshoe-polar',
+});
+mountPanelExport({
+  container: zoom.canvas.parentElement!,
+  getCanvas: () => zoom.canvas,
+  label: 'Cartesian zoom around sector',
+  filename: 'horseshoe-cartesian',
+});
 
 // All shared state goes through these so the two views stay in lockstep.
 function applySector(s: SectorRect | null): void {

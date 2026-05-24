@@ -1,12 +1,11 @@
 import { initTheme, mountThemeToggle } from './theme';
-import { registerExport, mountExportButton } from './exportPdf';
+import { mountPanelExport } from './exportPdf';
 initTheme();
 import { View3D } from './view3d';
 import { PolarPlot } from './polarPlot';
 import { TimePlot } from './timePlot';
 import { PhasePlot } from './phasePlot';
 import { bodyState } from './physics/kepler';
-mountExportButton();
 mountThemeToggle();
 import SimWorker from './worker?worker';
 import {
@@ -25,12 +24,30 @@ const polar = new PolarPlot($<HTMLCanvasElement>('polar-canvas'));
 const phasePlot = new PhasePlot($<HTMLCanvasElement>('phase-canvas'));
 const ztPlot = new TimePlot($<HTMLCanvasElement>('zt-canvas'));
 
-registerExport(() => [
-  { canvas: view3d.getCanvas(), label: '3D view' },
-  { canvas: ztPlot.canvas,      label: 'z(t)' },
-  { canvas: polar.canvas,       label: 'Polar (τ, |v|)' },
-  { canvas: phasePlot.canvas,   label: 'Poincaré (z, z′)' },
-], 'single-orbit');
+mountPanelExport({
+  container: $('view3d'),
+  getCanvas: () => view3d.getCanvas(),
+  label: '3D view',
+  filename: 'single-orbit-3d',
+});
+mountPanelExport({
+  container: $('ztplot'),
+  getCanvas: () => ztPlot.canvas,
+  label: 'z(t)',
+  filename: 'single-orbit-zt',
+});
+mountPanelExport({
+  container: $('polar'),
+  getCanvas: () => polar.canvas,
+  label: 'Polar (τ, |v|)',
+  filename: 'single-orbit-polar',
+});
+mountPanelExport({
+  container: $('phase'),
+  getCanvas: () => phasePlot.canvas,
+  label: 'Poincaré (z, z′)',
+  filename: 'single-orbit-phase',
+});
 
 const worker: Worker = new SimWorker();
 

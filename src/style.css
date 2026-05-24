@@ -119,8 +119,7 @@ html, body {
   border-bottom-color: var(--border-accent);
 }
 .tab-bar .spacer { flex: 1; }
-.tab-bar .theme-toggle,
-.tab-bar .export-pdf {
+.tab-bar .theme-toggle {
   align-self: center;
   background: var(--bg-button);
   color: var(--text-primary);
@@ -130,10 +129,26 @@ html, body {
   font-size: 11px;
   cursor: pointer;
   font-family: inherit;
-  margin-right: 4px;
 }
-.tab-bar .theme-toggle:hover,
-.tab-bar .export-pdf:hover { background: var(--bg-button-hover); }
+.tab-bar .theme-toggle:hover { background: var(--bg-button-hover); }
+
+/* Per-panel PDF export button — floats in the top-right of each panel */
+.panel-export-pdf {
+  position: absolute;
+  top: 8px; right: 8px;
+  z-index: 6;
+  background: var(--bg-button);
+  color: var(--text-primary);
+  border: 1px solid var(--border-input);
+  border-radius: 3px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+  opacity: 0.65;
+  transition: opacity 0.15s, background 0.15s;
+}
+.panel-export-pdf:hover { opacity: 1; background: var(--bg-button-hover); }
 
 #controls {
   padding: 16px; background: var(--bg-panel); border-right: 1px solid var(--border);
@@ -324,7 +339,7 @@ html, body {
 #view3d canvas { display: block; }
 .polar-controls {
   position: absolute;
-  top: 8px; right: 10px;
+  top: 8px; right: 72px;     /* room for .panel-export-pdf at right: 8px */
   z-index: 2;
   display: flex; align-items: center; gap: 6px;
   font-size: 11px; color: var(--text-muted);
@@ -334,7 +349,7 @@ html, body {
 .polar-controls .num { width: 56px; }
 .tplot-controls {
   position: absolute;
-  top: 8px; right: 10px;
+  top: 8px; right: 72px;
   z-index: 2;
   display: flex; align-items: center; gap: 6px;
   font-size: 11px; color: var(--text-muted);
