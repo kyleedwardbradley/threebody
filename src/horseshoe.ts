@@ -19,6 +19,9 @@ function applySector(s: SectorRect | null): void {
 function applyPolygon(pts: PolygonPoint[] | null): void {
   canvas.setPolygon(pts); zoom.setPolygon(pts);
 }
+function applySpiralPair(left: PolygonPoint[] | null, right: PolygonPoint[] | null): void {
+  canvas.setSpiralPair(left, right); zoom.setSpiralPair(left, right);
+}
 function applyPPoints(pts: { tau: number; v: number; label?: string }[]): void {
   canvas.setPPoints(pts); zoom.setPPoints(pts);
 }
@@ -315,6 +318,7 @@ $('reset').addEventListener('click', () => {
   stopAll();
   applyClearGrid();
   applyPolygon(null);
+  applySpiralPair(null, null);
   applyPPoints([]);
   polygonNodes.length = 0;
   heap.length = 0;
@@ -351,6 +355,7 @@ function invalidatePolygon(): void {
   pending = [];
   effVE = 0;
   applyPolygon(null);
+  applySpiralPair(null, null);
   updateSectorDisplay();
   if (hadPolygon) $('status').textContent = 'sector image cleared (parameters changed)';
 }
@@ -461,6 +466,11 @@ function consumeSpiralResults(
 
   // Build the two spiral edges into polygonNodes.
   polygonNodes.length = 0;
+  // Track the matched pair separately so the canvases can render the
+  // area between them as small per-row quads (cleaner than filling the
+  // self-intersecting polygon as one shape).
+  const leftSpiral: PolygonPoint[] = [];
+  const rightSpiral: PolygonPoint[] = [];
   // Left spiral (edge 0, s ∈ [0, 1)).
   for (let k = 0; k < validCount; k++) {
     const v0 = cfg.vS + (cfg.vE - cfg.vS) * (k / (K - 1));
@@ -469,6 +479,7 @@ function consumeSpiralResults(
       s, tau0: cfg.tauS, v0,
       tau: tauStars[k], v: vStars[k], escaped: false,
     });
+    leftSpiral.push({ tau: tauStars[k], v: vStars[k], escaped: false });
   }
   // Right spiral (edge 2, s ∈ [2, 3)) — walks effVE → vS in boundary order,
   // so node k of the walk corresponds to input index (validCount - 1 - k).
@@ -482,6 +493,13 @@ function consumeSpiralResults(
       escaped: false,
     });
   }
+  // Right spiral in v-ascending order to match left (paired by index k).
+  for (let k = 0; k < validCount; k++) {
+    rightSpiral.push({
+      tau: tauStars[K + k], v: vStars[K + k], escaped: false,
+    });
+  }
+  applySpiralPair(leftSpiral, rightSpiral);
 
   // Now shoot top (v=effVE) and bottom (v=vS) connectors.
   const Kt = K;
