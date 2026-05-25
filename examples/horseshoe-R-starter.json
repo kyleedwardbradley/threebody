@@ -1,0 +1,22 @@
+{
+  "format": "threebody-shapes",
+  "version": 1,
+  "createdAt": "2026-05-25T00:00:00.000Z",
+  "params": { "e": 0.5, "maxPeriods": 5 },
+  "shapes": [
+    {
+      "id": "starter-R",
+      "name": "R (starter)",
+      "color": "#3acdff",
+      "visible": true,
+      "closed": true,
+      "sampleN": 500,
+      "vertices": [
+        { "tau": -0.012, "v": 1.60 },
+        { "tau": -0.012, "v": 1.50 },
+        { "tau":  0.012, "v": 1.50 },
+        { "tau":  0.012, "v": 1.60 }
+      ]
+    }
+  ]
+}
