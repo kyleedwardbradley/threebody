@@ -30,6 +30,10 @@ export interface Palette {
   d1Line: string;
   pMarkerFill: string;
   pMarkerStroke: string;
+  edge0: string;
+  edge1: string;
+  edge2: string;
+  edge3: string;
 }
 
 const STORAGE_KEY = 'threebody-theme';
@@ -65,6 +69,10 @@ export function getPalette(): Palette {
     d1Line:          readVar(cs, '--d1-line'),
     pMarkerFill:     readVar(cs, '--p-marker-fill'),
     pMarkerStroke:   readVar(cs, '--p-marker-stroke'),
+    edge0:           readVar(cs, '--edge-0'),
+    edge1:           readVar(cs, '--edge-1'),
+    edge2:           readVar(cs, '--edge-2'),
+    edge3:           readVar(cs, '--edge-3'),
   };
 }
 

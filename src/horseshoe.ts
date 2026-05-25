@@ -287,7 +287,7 @@ function buildInitialHeap(): void {
 
 function redrawPolygon(): void {
   applyPolygon(polygonNodes.map((n) => ({
-    tau: n.tau, v: n.v, escaped: n.escaped,
+    tau: n.tau, v: n.v, escaped: n.escaped, s: n.s,
   })));
 }
 
@@ -782,7 +782,7 @@ function consumeEdgeResults(
 
 function applyVk(): void {
   applyVkPolygon(vkPolygonNodes.length > 0
-    ? vkPolygonNodes.map((n) => ({ tau: n.tau, v: n.v, escaped: n.escaped }))
+    ? vkPolygonNodes.map((n) => ({ tau: n.tau, v: n.v, escaped: n.escaped, s: n.s }))
     : null);
 }
 

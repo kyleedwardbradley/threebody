@@ -331,17 +331,41 @@ export class HorseshoeZoom {
       ctx.restore();
     };
 
-    // Polygon (U_k = φ(R) ∩ R) outline — matches the polar canvas's
-    // U_k fill colour.
-    if (this.polygon && this.polygon.length > 2) {
-      drawPolyline(this.polygon, T.polygonFill, 1.2, (t) => t, false);
-    }
+    // Per-edge stroke of a polygon (U_k or V_k): split vertices by
+    // floor(s) bin into 4 contiguous slices and stroke each in its own
+    // colour. drawPolyline only handles a single colour, so we call it
+    // per bin with the corresponding slice (plus the next slice's first
+    // vertex so the corner chord is drawn in this bin's colour).
+    const edgeColors = [T.edge0, T.edge1, T.edge2, T.edge3];
+    const strokePolygonByEdge = (poly: PolygonPoint[]): void => {
+      const slices: PolygonPoint[][] = [[], [], [], []];
+      const binOf = (p: PolygonPoint): number => {
+        const s = p.s;
+        if (typeof s !== 'number' || !isFinite(s)) return 0;
+        return Math.max(0, Math.min(3, Math.floor(((s % 4) + 4) % 4)));
+      };
+      const N = poly.length;
+      for (let i = 0; i < N; i++) {
+        const a = poly[i];
+        const bin = binOf(a);
+        slices[bin].push(a);
+        // Include the next vertex in this bin's slice so the corner
+        // chord (from this bin's last vertex into the next bin) is
+        // drawn in this bin's colour. The next bin will moveTo from
+        // its own first vertex regardless, so no double-draw.
+        const b = poly[(i + 1) % N];
+        const nextBin = binOf(b);
+        if (nextBin !== bin) slices[bin].push(b);
+      }
+      for (let c = 0; c < 4; c++) {
+        if (slices[c].length >= 2) {
+          drawPolyline(slices[c], edgeColors[c], 1.5, (t) => t, false);
+        }
+      }
+    };
 
-    // V_k = φ⁻¹(R) ∩ R. Stored as its own polygon (vkPolygon) by
-    // horseshoe.ts; drawn in blue.
-    if (this.vkPolygon && this.showVk && this.vkPolygon.length > 2) {
-      drawPolyline(this.vkPolygon, T.vkFill, 1.2, (t) => t, false);
-    }
+    if (this.polygon && this.polygon.length > 2) strokePolygonByEdge(this.polygon);
+    if (this.vkPolygon && this.showVk && this.vkPolygon.length > 2) strokePolygonByEdge(this.vkPolygon);
 
     // ∂D₀ (yellow) and ∂D₁ = ρ(∂D₀) (green) boundary curves.
     if (this.showBoundaries && this.boundaryD0 && this.boundaryD0.length > 1) {

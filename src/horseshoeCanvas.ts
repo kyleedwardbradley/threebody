@@ -21,6 +21,12 @@ export interface PolygonPoint {
   tau: number;        // τ* (cyclic mod 1)
   v: number;          // |v*|
   escaped: boolean;
+  // Boundary parameter s ∈ [0, 4) of the source vertex. Used by the
+  // per-edge-coloured renderers to bin the chord into one of four
+  // source edges (left / top / right / bottom). Optional for
+  // backwards compatibility with user-drawn shapes which don't have an
+  // s parameterisation; renderers fall back to a single colour.
+  s?: number;
 }
 
 // Viewport rectangle in NATURAL canvas pixel coordinates (the rectangle of
@@ -690,73 +696,63 @@ export class HorseshoeCanvas {
       ctx.fillText(months[m], cx + (R + 14) * Math.cos(a), cy + (R + 14) * Math.sin(a));
     }
 
-    // Sector overlay (annular wedge in natural polar coords).
+    // Sector overlay (annular wedge in natural polar coords). Filled
+    // with sectorFill; each of the four edges stroked in its own colour
+    // (matching the forward / backward image arcs below).
     if (this.sector) {
       const s = this.sector;
       const rIn = Math.max(0, Math.min(R, radiusOf(s.vS)));
       const rOut = Math.max(0, Math.min(R, radiusOf(s.vE)));
       const aS = angleOf(s.tauS);
       const aE = angleOf(s.tauE);
-      ctx.fillStyle = T.sectorFill;
-      ctx.strokeStyle = T.sectorStroke;
-      ctx.lineWidth = lw(1.2);
-      ctx.beginPath();
       const fromA = aS;
       const toA = aE > aS ? aE : aE + 2 * Math.PI;
+      // Fill the region first.
+      ctx.fillStyle = T.sectorFill;
+      ctx.beginPath();
       ctx.arc(cx, cy, rOut, fromA, toA, false);
       ctx.arc(cx, cy, rIn, toA, fromA, true);
       ctx.closePath();
       ctx.fill();
+      // Stroke each edge in its colour.
+      ctx.lineWidth = lw(1.8);
+      const edgeColors = [T.edge0, T.edge1, T.edge2, T.edge3];
+      // Edge 0: radial at aS from rIn to rOut.
+      ctx.strokeStyle = edgeColors[0];
+      ctx.beginPath();
+      ctx.moveTo(cx + rIn * Math.cos(fromA), cy + rIn * Math.sin(fromA));
+      ctx.lineTo(cx + rOut * Math.cos(fromA), cy + rOut * Math.sin(fromA));
+      ctx.stroke();
+      // Edge 1: top arc at rOut from aS to aE.
+      ctx.strokeStyle = edgeColors[1];
+      ctx.beginPath();
+      ctx.arc(cx, cy, rOut, fromA, toA, false);
+      ctx.stroke();
+      // Edge 2: radial at aE from rOut to rIn.
+      ctx.strokeStyle = edgeColors[2];
+      ctx.beginPath();
+      ctx.moveTo(cx + rOut * Math.cos(toA), cy + rOut * Math.sin(toA));
+      ctx.lineTo(cx + rIn * Math.cos(toA), cy + rIn * Math.sin(toA));
+      ctx.stroke();
+      // Edge 3: bottom arc at rIn back from aE to aS.
+      ctx.strokeStyle = edgeColors[3];
+      ctx.beginPath();
+      ctx.arc(cx, cy, rIn, toA, fromA, true);
       ctx.stroke();
     }
 
-    // U_k = φ(R) ∩ R: forward image of the sector. Solid red fill (no
-    // outline) so the polygon reads as a region rather than a curve.
+    // U_k = φ(R) ∩ R: forward image of the sector. Drawn as four
+    // colour-coded sub-paths, one per source edge (left / top / right /
+    // bottom in s-order), so the user can see how each rectangle edge
+    // gets warped. Each chord takes the colour of its starting node's
+    // edge bin (floor(s) mod 4).
     if (this.polygon && this.polygon.length > 2) {
-      ctx.fillStyle = T.polygonFill;
-      ctx.beginPath();
-      let started = false;
-      for (const p of this.polygon) {
-        if (p.escaped || !isFinite(p.tau) || !isFinite(p.v)) {
-          started = false; continue;
-        }
-        if (!vIn(p.v)) { started = false; continue; }
-        const rad = radiusOf(p.v);
-        if (rad < 0 || rad > R) { started = false; continue; }
-        const a = angleOf(unwrap(p.tau));
-        const x = cx + rad * Math.cos(a);
-        const y = cy + rad * Math.sin(a);
-        if (started) ctx.lineTo(x, y); else ctx.moveTo(x, y);
-        started = true;
-      }
-      ctx.closePath();
-      ctx.fill('evenodd');
+      drawPolygonByEdge(ctx, this.polygon, T, lw, vIn, radiusOf, angleOf, unwrap, cx, cy, R);
     }
 
-    // V_k = φ⁻¹(R) ∩ R. Drawn from the vkPolygon snapshot populated by
-    // runVk() in horseshoe.ts — either ρ(U_k) for τc-symmetric sectors
-    // or a separate shoot of the reflected sector. Solid 40% blue fill
-    // so where it crosses U_k (red) and the sector overlay you can read
-    // off V_k ∩ R.
+    // V_k = φ⁻¹(R) ∩ R. Same per-edge colouring scheme as U_k.
     if (this.vkPolygon && this.showVk && this.vkPolygon.length > 2) {
-      ctx.fillStyle = T.vkFill;
-      ctx.beginPath();
-      let started = false;
-      for (const p of this.vkPolygon) {
-        if (p.escaped || !isFinite(p.tau) || !isFinite(p.v)) {
-          started = false; continue;
-        }
-        if (!vIn(p.v)) { started = false; continue; }
-        const rad = radiusOf(p.v);
-        if (rad < 0 || rad > R) { started = false; continue; }
-        const a = angleOf(unwrap(p.tau));
-        const x = cx + rad * Math.cos(a);
-        const y = cy + rad * Math.sin(a);
-        if (started) ctx.lineTo(x, y); else ctx.moveTo(x, y);
-        started = true;
-      }
-      ctx.closePath();
-      ctx.fill('evenodd');
+      drawPolygonByEdge(ctx, this.vkPolygon, T, lw, vIn, radiusOf, angleOf, unwrap, cx, cy, R);
     }
 
     // ∂D₀ (yellow) and ∂D₁ (green) boundary curves. ∂D₁ = ρ(∂D₀) where
@@ -927,6 +923,67 @@ export class HorseshoeCanvas {
     if (this.showGrid && this.tauStars) this.drawColorBar(ctx, w, h);
   }
 
+}
+
+// Stroke a polygon (sector image) on the polar disc, colour-coded per
+// source edge. Each polygon vertex carries an `s` ∈ [0, 4); the chord
+// from vertex i to i+1 inherits floor(s_i) mod 4 as its edge bin. We
+// batch chords by bin into four Path2D instances and stroke each in
+// its colour — cheaper than one stroke per chord at typical polygon
+// sizes (10²–10⁴ vertices).
+function drawPolygonByEdge(
+  ctx: CanvasRenderingContext2D,
+  poly: PolygonPoint[],
+  T: ReturnType<typeof import('./theme').getPalette>,
+  lw: (px: number) => number,
+  vIn: (v: number) => boolean,
+  radiusOf: (v: number) => number,
+  angleOf: (tau: number) => number,
+  unwrap: (tau: number) => number,
+  cx: number, cy: number, R: number,
+): void {
+  const colors = [T.edge0, T.edge1, T.edge2, T.edge3];
+  const paths: Path2D[] = [new Path2D(), new Path2D(), new Path2D(), new Path2D()];
+  const lastPos: ({ x: number; y: number } | null)[] = [null, null, null, null];
+  const screen = (p: PolygonPoint): { x: number; y: number } | null => {
+    if (p.escaped || !isFinite(p.tau) || !isFinite(p.v)) return null;
+    if (!vIn(p.v)) return null;
+    const rad = radiusOf(p.v);
+    if (rad < 0 || rad > R) return null;
+    const a = angleOf(unwrap(p.tau));
+    return { x: cx + rad * Math.cos(a), y: cy + rad * Math.sin(a) };
+  };
+  const N = poly.length;
+  for (let i = 0; i < N; i++) {
+    const a = poly[i];
+    const b = poly[(i + 1) % N];
+    const sa = screen(a);
+    const sb = screen(b);
+    if (!sa || !sb) {
+      // Break in either endpoint: drop the chord and invalidate this
+      // bin's continuity so the next chord in that bin starts fresh.
+      for (let c = 0; c < 4; c++) lastPos[c] = null;
+      continue;
+    }
+    const s = a.s;
+    const bin = (typeof s === 'number' && isFinite(s))
+      ? Math.floor(((s % 4) + 4) % 4) : 0;
+    const safeBin = Math.max(0, Math.min(3, bin));
+    const p = paths[safeBin];
+    const last = lastPos[safeBin];
+    if (last && Math.abs(last.x - sa.x) < 0.5 && Math.abs(last.y - sa.y) < 0.5) {
+      p.lineTo(sb.x, sb.y);
+    } else {
+      p.moveTo(sa.x, sa.y);
+      p.lineTo(sb.x, sb.y);
+    }
+    lastPos[safeBin] = { x: sb.x, y: sb.y };
+  }
+  ctx.lineWidth = lw(1.5);
+  for (let c = 0; c < 4; c++) {
+    ctx.strokeStyle = colors[c];
+    ctx.stroke(paths[c]);
+  }
 }
 
 // Cyclic τ bounding-arc: find the largest gap and return the complement.

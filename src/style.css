@@ -31,6 +31,13 @@
   --grid-line-strong:    rgba(180, 200, 230, 0.18);
   --polygon-fill:        rgb(220, 90, 90);
   --vk-fill:             rgba(80, 140, 255, 0.40);
+  /* Per-edge colours for sector / U_k / V_k rendering. Edges are
+     numbered by their s-range: 0=left (s∈[0,1)), 1=top (s∈[1,2)),
+     2=right (s∈[2,3)), 3=bottom (s∈[3,4)). */
+  --edge-0:              #ff8a3a;
+  --edge-1:              #3acdff;
+  --edge-2:              #5fd07a;
+  --edge-3:              #ff66c4;
   --sector-fill:         rgba(80, 140, 255, 0.30);
   --sector-stroke:       rgba(140, 180, 255, 0.9);
   --d0-line:             #ffd24a;
@@ -67,6 +74,10 @@
   --grid-line-strong:    rgba(20, 30, 60, 0.18);
   --polygon-fill:        rgb(210, 70, 70);
   --vk-fill:             rgba(40, 90, 200, 0.32);
+  --edge-0:              #c2410c;
+  --edge-1:              #0369a1;
+  --edge-2:              #15803d;
+  --edge-3:              #be185d;
   --sector-fill:         rgba(80, 140, 255, 0.22);
   --sector-stroke:       rgba(40, 80, 160, 0.85);
   --d0-line:             #b58400;
