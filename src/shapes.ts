@@ -8,7 +8,13 @@ export interface Shape {
   name: string;
   vertices: { tau: number; v: number }[]; // ordered along the shape
   closed: boolean;                        // polygon if true, polyline if false
-  color: string;                          // canvas-renderable colour string
+  color: string;                          // single-colour fallback / row swatch
+  // Per-edge palette used when rendering: chord starting at vertex i is
+  // drawn in edgeColors[edgeIdx[i]]. Length = number of *source* edges,
+  // not vertices — so an N-edge user polygon has N colours regardless
+  // of how many resampled / refined vertices its image gets.
+  edgeColors?: string[];
+  edgeIdx?: number[];                     // one entry per vertex
   visible: boolean;
   // Per-shape resample count used when this shape is forward/backward
   // mapped. New shapes inherit the page's current default (the global
@@ -56,6 +62,16 @@ class ShapeStore {
     const id = `sh_${Date.now().toString(36)}_${this.nextNum++}`;
     const color = init.color ?? PALETTE[this.palIdx++ % PALETTE.length];
     const name  = init.name  ?? `Shape ${this.shapes.length + 1}`;
+    const N = init.vertices.length;
+    // Number of source edges = N for closed polygons, N-1 for open
+    // polylines. The per-vertex edgeIdx[i] is the source-edge whose
+    // FORWARD chord starts at vertex i — for the trailing vertex of an
+    // open polyline that chord doesn't exist, so we clamp to last edge.
+    const numEdges = init.closed ? N : Math.max(1, N - 1);
+    const edgeColors = init.edgeColors
+      ?? Array.from({ length: numEdges }, (_, i) => PALETTE[i % PALETTE.length]);
+    const edgeIdx = init.edgeIdx
+      ?? Array.from({ length: N }, (_, i) => Math.min(i, numEdges - 1));
     const shape: Shape = {
       id, name, color, visible: true,
       sampleN: init.sampleN ?? 200,
@@ -63,6 +79,7 @@ class ShapeStore {
       closed: init.closed,
       parent: init.parent,
       sourceVertices: init.sourceVertices,
+      edgeColors, edgeIdx,
     };
     this.shapes.push(shape);
     this.emit();
@@ -120,6 +137,75 @@ export const SHAPE_REFINE_PX = 1;
 // vertices distributed around the loop.
 //
 // If verts.length < 2 returns a copy of verts (nothing to interpolate).
+// Same arc-length resample as resamplePolyline, but also reports the
+// SOURCE-EDGE index each output sample belongs to. The source-edge of
+// segment k (from uw[k] to uw[k+1]) is sourceEdgeIdx?.[k] ?? k — pass
+// the parent shape's edgeIdx to propagate per-edge colouring through
+// mapping (φ images keep the same number of "logical edges" as the
+// source even though each one is now sampled by many vertices).
+export function resamplePolylineWithEdgeIdx(
+  verts: { tau: number; v: number }[],
+  closed: boolean,
+  N: number,
+  sourceEdgeIdx?: ReadonlyArray<number>,
+): { points: { tau: number; v: number }[]; edgeIdx: number[] } {
+  if (verts.length < 2 || N < 2) {
+    return {
+      points: verts.map((p) => ({ tau: p.tau, v: p.v })),
+      edgeIdx: verts.map((_, i) => sourceEdgeIdx?.[i] ?? i),
+    };
+  }
+  const n = verts.length;
+  const uw: { tau: number; v: number }[] = [{ tau: verts[0].tau, v: verts[0].v }];
+  for (let i = 1; i < n; i++) {
+    let dt = verts[i].tau - uw[i - 1].tau;
+    dt -= Math.round(dt);
+    uw.push({ tau: uw[i - 1].tau + dt, v: verts[i].v });
+  }
+  if (closed) {
+    let dt = verts[0].tau - uw[n - 1].tau;
+    dt -= Math.round(dt);
+    uw.push({ tau: uw[n - 1].tau + dt, v: verts[0].v });
+  }
+  const cum: number[] = [0];
+  for (let i = 1; i < uw.length; i++) {
+    cum.push(cum[i - 1] + Math.hypot(
+      uw[i].tau - uw[i - 1].tau,
+      uw[i].v - uw[i - 1].v,
+    ));
+  }
+  const total = cum[cum.length - 1];
+  if (total === 0) {
+    return {
+      points: Array.from({ length: N }, () => ({ tau: verts[0].tau, v: verts[0].v })),
+      edgeIdx: new Array<number>(N).fill(sourceEdgeIdx?.[0] ?? 0),
+    };
+  }
+  const step = closed ? (total / N) : (total / (N - 1));
+  const out: { tau: number; v: number }[] = new Array(N);
+  const eOut: number[] = new Array(N);
+  let cursor = 0;
+  const wrap1 = (t: number) => ((t % 1) + 1) % 1;
+  for (let k = 0; k < N; k++) {
+    const target = k * step;
+    while (cursor < cum.length - 1 && cum[cursor + 1] < target) cursor++;
+    if (cursor >= cum.length - 1) {
+      out[k] = { tau: wrap1(uw[uw.length - 1].tau), v: uw[uw.length - 1].v };
+      eOut[k] = sourceEdgeIdx?.[Math.min(uw.length - 2, n - 1)] ?? (uw.length - 2);
+      continue;
+    }
+    const c0 = cum[cursor], c1 = cum[cursor + 1];
+    const t = c1 > c0 ? (target - c0) / (c1 - c0) : 0;
+    const p0 = uw[cursor], p1 = uw[cursor + 1];
+    out[k] = {
+      tau: wrap1(p0.tau + t * (p1.tau - p0.tau)),
+      v:   p0.v + t * (p1.v - p0.v),
+    };
+    eOut[k] = sourceEdgeIdx?.[cursor] ?? cursor;
+  }
+  return { points: out, edgeIdx: eOut };
+}
+
 export function resamplePolyline(
   verts: { tau: number; v: number }[],
   closed: boolean,
@@ -219,6 +305,17 @@ export function deserializeShapes(text: string): Shape[] {
       }
     }
     if (typeof s.sampleN !== 'number') s.sampleN = 200;
+    // Backfill per-edge fields for files saved before per-edge colouring.
+    if (!Array.isArray(s.edgeColors) || s.edgeColors.length === 0) {
+      const N = s.vertices.length;
+      const numEdges = s.closed ? N : Math.max(1, N - 1);
+      s.edgeColors = Array.from({ length: numEdges },
+        (_, i) => PALETTE[i % PALETTE.length]);
+    }
+    if (!Array.isArray(s.edgeIdx) || s.edgeIdx.length !== s.vertices.length) {
+      const numEdges = s.edgeColors.length;
+      s.edgeIdx = s.vertices.map((_, i) => Math.min(i, Math.max(0, numEdges - 1)));
+    }
   }
   return f.shapes;
 }

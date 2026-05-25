@@ -782,41 +782,80 @@ export class HorseshoeCanvas {
     }
 
     // User-drawn shapes overlay. Each shape strokes its vertices as a
-    // polyline (or closed polygon) in its own colour. Vertex dots help
-    // pick out short shapes.
+    // polyline (or closed polygon); per-chord colour comes from the
+    // shape's edge palette indexed by edgeIdx[i] for chord i→i+1. Vertex
+    // dots inherit the colour of the edge starting at that vertex.
     if (this.shapes.length > 0) {
       for (const sh of this.shapes) {
         if (!sh.visible || sh.vertices.length < 1) continue;
-        ctx.strokeStyle = sh.color;
-        ctx.fillStyle = sh.color;
-        ctx.lineWidth = lw(1.5);
-        if (sh.vertices.length >= 2) {
-          ctx.beginPath();
-          let started = false;
-          for (const pt of sh.vertices) {
-            if (!isFinite(pt.tau) || !isFinite(pt.v)) { started = false; continue; }
-            if (!vIn(pt.v)) { started = false; continue; }
-            const rad = radiusOf(pt.v);
-            if (rad < 0 || rad > R + 2) { started = false; continue; }
-            const a = angleOf(unwrap(pt.tau));
-            const x = cx + rad * Math.cos(a);
-            const y = cy + rad * Math.sin(a);
-            if (started) ctx.lineTo(x, y); else ctx.moveTo(x, y);
-            started = true;
+        const Nv = sh.vertices.length;
+        const colors = sh.edgeColors;
+        const ei = sh.edgeIdx;
+        const usePerEdge = !!(colors && ei && colors.length > 0 && ei.length === Nv);
+
+        const pts: { x: number; y: number; ok: boolean }[] = new Array(Nv);
+        for (let i = 0; i < Nv; i++) {
+          const pt = sh.vertices[i];
+          if (!isFinite(pt.tau) || !isFinite(pt.v) || !vIn(pt.v)) {
+            pts[i] = { x: 0, y: 0, ok: false }; continue;
           }
-          if (sh.closed) ctx.closePath();
-          ctx.stroke();
-        }
-        // Vertex dots.
-        for (const pt of sh.vertices) {
-          if (!vIn(pt.v)) continue;
           const rad = radiusOf(pt.v);
-          if (rad < 0 || rad > R) continue;
-          const a = angleOf(unwrap(pt.tau));
-          const x = cx + rad * Math.cos(a);
-          const y = cy + rad * Math.sin(a);
+          if (rad < 0 || rad > R + 2) {
+            pts[i] = { x: 0, y: 0, ok: false }; continue;
+          }
+          const ang = angleOf(unwrap(pt.tau));
+          pts[i] = {
+            x: cx + rad * Math.cos(ang),
+            y: cy + rad * Math.sin(ang),
+            ok: true,
+          };
+        }
+
+        ctx.lineWidth = lw(1.5);
+        if (Nv >= 2) {
+          if (usePerEdge) {
+            const nb = colors!.length;
+            const paths: Path2D[] = Array.from({ length: nb }, () => new Path2D());
+            const segLast = sh.closed ? Nv : Nv - 1;
+            for (let i = 0; i < segLast; i++) {
+              const j = (i + 1) % Nv;
+              const pa = pts[i], pb = pts[j];
+              if (!pa.ok || !pb.ok) continue;
+              const raw = ei![i] ?? 0;
+              const bin = ((raw % nb) + nb) % nb;
+              paths[bin].moveTo(pa.x, pa.y);
+              paths[bin].lineTo(pb.x, pb.y);
+            }
+            for (let b = 0; b < nb; b++) {
+              ctx.strokeStyle = colors![b];
+              ctx.stroke(paths[b]);
+            }
+          } else {
+            ctx.strokeStyle = sh.color;
+            ctx.beginPath();
+            let started = false;
+            for (const p of pts) {
+              if (!p.ok) { started = false; continue; }
+              if (started) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y);
+              started = true;
+            }
+            if (sh.closed && started) ctx.closePath();
+            ctx.stroke();
+          }
+        }
+        // Vertex dots — colour-matched to the edge palette where available.
+        for (let i = 0; i < Nv; i++) {
+          const p = pts[i];
+          if (!p.ok) continue;
+          let dotColor = sh.color;
+          if (usePerEdge) {
+            const raw = ei![i] ?? 0;
+            const nb = colors!.length;
+            dotColor = colors![((raw % nb) + nb) % nb];
+          }
+          ctx.fillStyle = dotColor;
           ctx.beginPath();
-          ctx.arc(x, y, lw(2), 0, Math.PI * 2);
+          ctx.arc(p.x, p.y, lw(2), 0, Math.PI * 2);
           ctx.fill();
         }
       }

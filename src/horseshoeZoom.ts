@@ -373,10 +373,43 @@ export class HorseshoeZoom {
       drawPolyline(this.boundaryD0, T.d1Line, 1.5, (t) => -t, true);
     }
 
-    // User-drawn shapes: stroke each visible shape in its own colour.
+    // User-drawn shapes: stroke each chord in the colour of the source
+    // edge it descended from. drawPolyline handles τ-wrapping per call,
+    // so we batch chords by bin and pass each bin's contiguous run as
+    // one polyline (corner chord into the next bin is included so it
+    // gets drawn in this bin's colour, matching the V_k splitter).
     for (const sh of this.shapes) {
       if (!sh.visible || sh.vertices.length < 2) continue;
-      drawPolyline(sh.vertices, sh.color, 1.5, (t) => t, sh.closed);
+      const Nv = sh.vertices.length;
+      const colors = sh.edgeColors;
+      const ei = sh.edgeIdx;
+      const usePerEdge = !!(colors && ei && colors.length > 0 && ei.length === Nv);
+      if (!usePerEdge) {
+        drawPolyline(sh.vertices, sh.color, 1.5, (t) => t, sh.closed);
+        continue;
+      }
+      const nb = colors!.length;
+      const binOf = (i: number): number => {
+        const raw = ei![i] ?? 0;
+        return ((raw % nb) + nb) % nb;
+      };
+      const slices: { tau: number; v: number }[][] = Array.from({ length: nb }, () => []);
+      const segLast = sh.closed ? Nv : Nv - 1;
+      for (let i = 0; i < Nv; i++) {
+        const a = sh.vertices[i];
+        const bin = binOf(i);
+        slices[bin].push(a);
+        if (i < segLast) {
+          const b = sh.vertices[(i + 1) % Nv];
+          const nextBin = binOf((i + 1) % Nv);
+          if (nextBin !== bin) slices[bin].push(b);
+        }
+      }
+      for (let b = 0; b < nb; b++) {
+        if (slices[b].length >= 2) {
+          drawPolyline(slices[b], colors![b], 1.5, (t) => t, false);
+        }
+      }
     }
 
     // P markers — render at any τ-shift that lands inside the window.

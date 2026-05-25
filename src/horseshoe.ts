@@ -1439,7 +1439,7 @@ initShapesUI();
 // image. Shape list is rendered into #shape-list and lives in shapeStore.
 // ============================================================================
 
-import { shapeStore, type Shape, type ShapeId, serializeShapes, deserializeShapes, resamplePolyline, SHAPE_REFINE_PX } from './shapes';
+import { shapeStore, type Shape, type ShapeId, serializeShapes, deserializeShapes, resamplePolyline, resamplePolylineWithEdgeIdx, SHAPE_REFINE_PX } from './shapes';
 
 // Global setting for shape map operations: source curve is resampled to
 // this many points (arc-length spaced in (τ, v)) before each map. Higher
@@ -1470,8 +1470,11 @@ function rho(tau: number): number {
 
 // Per-map state: the resampled source positions used to seed this map.
 // Captured at startShapeMap and stored on the child shape so refinement
-// has a 1:1 source-vertex array for edge bisection.
+// has a 1:1 source-vertex array for edge bisection. The companion
+// edgeIdx array tracks which SOURCE edge each sample fell on so the
+// child shape can be coloured per-edge like its parent.
 let mapSourceSamples: { tau: number; v: number }[] = [];
+let mapSourceEdgeIdx: number[] = [];
 
 function startShapeMap(shape: Shape, via: 'forward' | 'backward'): void {
   if (phase !== 'idle') return;
@@ -1481,10 +1484,19 @@ function startShapeMap(shape: Shape, via: 'forward' | 'backward'): void {
   // smooth even when the user drew only a few vertices. N comes from
   // the source shape's per-shape sampleN.
   const N = Math.max(2, Math.min(20000, Math.round(shape.sampleN)));
-  const samples = shape.vertices.length >= 2
-    ? resamplePolyline(shape.vertices, shape.closed, N)
-    : shape.vertices.map((p) => ({ tau: p.tau, v: p.v }));
+  let samples: { tau: number; v: number }[];
+  let sampleEdgeIdx: number[];
+  if (shape.vertices.length >= 2) {
+    const r = resamplePolylineWithEdgeIdx(
+      shape.vertices, shape.closed, N, shape.edgeIdx);
+    samples = r.points;
+    sampleEdgeIdx = r.edgeIdx;
+  } else {
+    samples = shape.vertices.map((p) => ({ tau: p.tau, v: p.v }));
+    sampleEdgeIdx = shape.vertices.map((_, i) => shape.edgeIdx?.[i] ?? i);
+  }
   mapSourceSamples = samples;
+  mapSourceEdgeIdx = sampleEdgeIdx;
   const tau0s: number[] = [];
   const v0s: number[] = [];
   for (const p of samples) {
@@ -1526,9 +1538,14 @@ function consumeShapeMap(tauStars: Float32Array, vStars: Float32Array, escapes: 
     // Mapped children inherit their parent's per-shape N so successive
     // iterates (φ², φ³, …) use the same resample density.
     sampleN: src.sampleN,
+    // Inherit the parent's per-edge palette and per-sample edge index
+    // so the child renders with the same colouring scheme.
+    edgeColors: src.edgeColors ? src.edgeColors.slice() : undefined,
+    edgeIdx: mapSourceEdgeIdx.slice(),
   });
   shapeJob = null;
   mapSourceSamples = [];
+  mapSourceEdgeIdx = [];
   $('status').textContent = `mapped '${src.name}' ${via} (${samples.length} samples)`;
 }
 
@@ -1608,16 +1625,21 @@ function consumeShapeRefine(tauStars: Float32Array, vStars: Float32Array, escape
     .sort((a, b) => b.sourceEdge - a.sourceEdge);
   const srcV = img.sourceVertices.slice();
   const imgV = img.vertices.slice();
+  const eiV = (img.edgeIdx ?? imgV.map((_, i) => i)).slice();
   let added = 0;
   for (const r of refined) {
     if (r.escaped) continue;
     const t = via === 'forward' ? r.tau : rho(r.tau);
     srcV.splice(r.sourceEdge + 1, 0, r.sMid);
     imgV.splice(r.sourceEdge + 1, 0, { tau: t, v: r.v });
+    // New sample inherits the source-edge of the LEFT neighbour, which
+    // is the edge being bisected — guaranteed in-bounds because we just
+    // spliced at sourceEdge+1.
+    eiV.splice(r.sourceEdge + 1, 0, eiV[r.sourceEdge] ?? 0);
     added++;
   }
   // Update image shape (vertices) and its sourceVertices in lockstep.
-  shapeStore.update(img.id, { sourceVertices: srcV });
+  shapeStore.update(img.id, { sourceVertices: srcV, edgeIdx: eiV });
   shapeStore.replaceVertices(img.id, imgV);
   shapeJob = null;
   $('status').textContent = `refined '${img.name}': +${added} samples (now ${imgV.length})`;
@@ -1666,10 +1688,14 @@ function initShapesUI(): void {
         const loaded = deserializeShapes(text);
         shapeStore.clear();
         for (const s of loaded) {
-          // re-add via store so colours/ids are reissued cleanly
+          // re-add via store so ids are reissued cleanly; carry colours
+          // and edge-palette so the imported shape renders identically.
           shapeStore.add({
             name: s.name, vertices: s.vertices, closed: s.closed,
             color: s.color, parent: s.parent,
+            sampleN: s.sampleN,
+            edgeColors: s.edgeColors, edgeIdx: s.edgeIdx,
+            sourceVertices: s.sourceVertices,
           });
         }
         $('status').textContent = `loaded ${loaded.length} shapes from ${f.name}`;
