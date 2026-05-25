@@ -76,6 +76,10 @@ export class HorseshoeCanvas {
   // Toggled with showVk; nothing is drawn unless vkPolygon is non-null.
   private vkPolygon: PolygonPoint[] | null = null;
   private showVk = false;
+  // Curved sector boundary (Moser's R) — when non-null, replaces the
+  // axis-aligned `sector` rectangle as the blue overlay. Points are a
+  // closed CCW polyline in (τ, v).
+  private sectorCurve: { tau: number; v: number }[] | null = null;
   private showGrid = true;
   private showImage = false;
 
@@ -229,6 +233,9 @@ export class HorseshoeCanvas {
   // ----- overlays -----
 
   setSector(s: SectorRect | null): void { this.sector = s; this.draw(); }
+  setSectorCurve(pts: { tau: number; v: number }[] | null): void {
+    this.sectorCurve = pts; this.draw();
+  }
   setPolygon(pts: PolygonPoint[] | null): void { this.polygon = pts; this.draw(); }
   setSpiralPair(left: PolygonPoint[] | null, right: PolygonPoint[] | null): void {
     this.spiralLeft = left;
@@ -590,8 +597,29 @@ export class HorseshoeCanvas {
       ctx.fillText(months[m], cx + (R + 14) * Math.cos(a), cy + (R + 14) * Math.sin(a));
     }
 
-    // Sector overlay (annular wedge in natural polar coords).
-    if (this.sector) {
+    // Sector overlay. If a curved boundary has been set (Moser-R mode),
+    // draw the closed polyline instead of the axis-aligned annular wedge.
+    if (this.sectorCurve && this.sectorCurve.length > 2) {
+      ctx.fillStyle = T.sectorFill;
+      ctx.strokeStyle = T.sectorStroke;
+      ctx.lineWidth = lw(1.2);
+      ctx.beginPath();
+      let started = false;
+      for (const p of this.sectorCurve) {
+        if (!isFinite(p.tau) || !isFinite(p.v)) { started = false; continue; }
+        if (!vIn(p.v)) { started = false; continue; }
+        const rad = radiusOf(p.v);
+        if (rad < 0 || rad > R) { started = false; continue; }
+        const a = angleOf(unwrap(p.tau));
+        const x = cx + rad * Math.cos(a);
+        const y = cy + rad * Math.sin(a);
+        if (started) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+        started = true;
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    } else if (this.sector) {
       const s = this.sector;
       const rIn = Math.max(0, Math.min(R, radiusOf(s.vS)));
       const rOut = Math.max(0, Math.min(R, radiusOf(s.vE)));

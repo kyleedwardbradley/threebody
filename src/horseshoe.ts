@@ -4,6 +4,7 @@ initTheme();
 import { HorseshoeCanvas, type SectorRect, type PolygonPoint, type ViewRect } from './horseshoeCanvas';
 import { HorseshoeZoom, type ZoomRange } from './horseshoeZoom';
 import HorseshoeWorker from './horseshoe-worker?worker';
+import { computeR } from './moserR';
 mountThemeToggle();
 import type {
   HorseshoeMainToWorker,
@@ -93,10 +94,15 @@ interface Cfg {
   tauC: number; tauD: number;
   vS: number; vE: number;
   k: number;
+  // Moser-R mode offsets: thin direction (perpendicular to D₀) and long
+  // direction (perpendicular to D₁). Used only when the curved-R
+  // boundary is active.
+  o1: number; o2: number;
 }
 const cfg: Cfg = {
   e: 0.5, vMax: 3.2, maxPeriods: 5, n: 200,
   tauC: 0.000, tauD: 0.011, vS: 0.300, vE: 1.848, k: 3800,
+  o1: 0.005, o2: 0.05,
 };
 function tauStart(): number { return cfg.tauC - cfg.tauD; }
 function tauEnd(): number { return cfg.tauC + cfg.tauD; }
@@ -107,6 +113,7 @@ type Phase = 'idle' | 'grid'
   | 'sector-spirals'   // shooting the two τ-spirals at matched v
   | 'sector-edges'     // shooting top + bottom connectors at the effective vE
   | 'sector-refining'  // round-based refinement on the closed boundary
+  | 'r-sector'         // Moser-R: shoot all 4K curved-boundary samples in one batch
   | 'vk-spirals'       // V_k: shoot reflected sector's two τ-spirals via φ
   | 'vk-edges'         // V_k: shoot reflected sector's top + bottom connectors
   | 'vk-refining'      // V_k: round-based refinement on V_k boundary
@@ -168,6 +175,12 @@ let vkSpiralK = 0;
 let vkEdgeKtau = 0;
 let vkEffVE = 0;
 let vkPending: PendingGap[] = [];
+
+// Moser-R curved boundary, when active. Four arcs of K samples each
+// (rArcLen = K), shared corners; boundaryParam(s) interpolates along
+// these instead of the rectangle edges. null = rectangle mode.
+let rArcs: import('./moserR').CurvePoint[][] | null = null;
+let rArcLen = 0;
 const heap: Gap[] = [];                   // max-heap on dist
 let pending: PendingGap[] = [];
 // Refine one gap per round-trip so we strictly process the longest
@@ -191,6 +204,25 @@ function throttledRedraw(): void {
 //   edge 2 (s∈[2,3)): right spiral τ=tauE, v: effVE → vS
 //   edge 3 (s∈[3,4)): bottom       v=vS, τ: tauE → tauS
 function boundaryParam(s: number): { tau0: number; v0: number } {
+  // Curved Moser-R mode: interpolate along the precomputed 4·K boundary
+  // samples. s ∈ [k, k+1) maps to arc k, and the index within the arc
+  // is the fractional t.
+  if (rArcs) {
+    const sm = ((s % 4) + 4) % 4;
+    const arcIdx = Math.floor(sm) % 4;
+    const t = sm - arcIdx;
+    const arc = rArcs[arcIdx];
+    const K = arc.length;
+    if (K === 0) return { tau0: 0, v0: 0 };
+    if (K === 1) return { tau0: arc[0].tau, v0: arc[0].v };
+    const x = t * (K - 1);
+    const i = Math.min(K - 2, Math.floor(x));
+    const ft = x - i;
+    return {
+      tau0: arc[i].tau + ft * (arc[i + 1].tau - arc[i].tau),
+      v0:   arc[i].v   + ft * (arc[i + 1].v   - arc[i].v),
+    };
+  }
   const vUpper = effVE > 0 ? effVE : cfg.vE;
   const sm = ((s % 4) + 4) % 4;
   const edge = Math.floor(sm) % 4;
@@ -351,7 +383,7 @@ bindNumeric('n', 'n-num',
 // the τ=0 seam continuously (e.g. tauC=0, tauD=0.1 → [-0.1, 0.1]).
 bindNumeric('tauc', 'tauc-num',
   { toNum: (v) => v.toFixed(3), clamp: (v) => ((v % 1) + 1) % 1 },
-  (v) => { cfg.tauC = v; updateVkButton(); invalidatePolygon(); });
+  (v) => { cfg.tauC = v; updateVkButton(); updateRModeButtons(); invalidatePolygon(); });
 
 bindNumeric('taud', 'taud-num',
   { toNum: (v) => v.toFixed(3), clamp: (v) => Math.max(0, Math.min(0.5, v)) },
@@ -369,6 +401,13 @@ bindNumeric('k', 'k-num',
   { toNum: (v) => Math.round(v).toString(),
     clamp: (v) => Math.max(4, Math.min(5000, Math.round(v))) },
   (v) => { cfg.k = v; invalidatePolygon(); });
+
+bindNumeric('o1', 'o1-num',
+  { toNum: (v) => v.toFixed(4), clamp: (v) => Math.max(1e-5, v) },
+  (v) => { cfg.o1 = v; if (rArcs) defineRFromBoundaries(); });
+bindNumeric('o2', 'o2-num',
+  { toNum: (v) => v.toFixed(4), clamp: (v) => Math.max(1e-5, v) },
+  (v) => { cfg.o2 = v; if (rArcs) defineRFromBoundaries(); });
 
 // ---------- Buttons ----------
 
@@ -469,6 +508,8 @@ canvas.onZoomBoxDrawn = (region) => {
 
 $('run-sector').addEventListener('click', () => runSector());
 $('refine-sector').addEventListener('click', () => startRefinement());
+$('define-r').addEventListener('click', () => defineRFromBoundaries());
+$('clear-r').addEventListener('click', () => clearRSector());
 $('reset').addEventListener('click', () => {
   stopAll();
   applyClearGrid();
@@ -506,8 +547,9 @@ function killWorker(): void {
 function invalidatePolygon(): void {
   const hadPolygon = polygonNodes.length > 0;
   if (worker && (phase === 'sector-spirals' || phase === 'sector-edges'
-              || phase === 'sector-refining' || phase === 'vk-spirals'
-              || phase === 'vk-edges' || phase === 'vk-refining')) {
+              || phase === 'sector-refining' || phase === 'r-sector'
+              || phase === 'vk-spirals' || phase === 'vk-edges'
+              || phase === 'vk-refining')) {
     worker.postMessage({ type: 'stop' } as HorseshoeMainToWorker);
     killWorker();
     phase = 'idle';
@@ -552,7 +594,7 @@ function invalidateAll(): void {
 
 function stopAll(): void {
   const wasUk = phase === 'sector-spirals' || phase === 'sector-edges'
-             || phase === 'sector-refining';
+             || phase === 'sector-refining' || phase === 'r-sector';
   const wasVk = phase === 'vk-spirals' || phase === 'vk-edges'
              || phase === 'vk-refining';
   // finding-p just falls through to idle below
@@ -600,6 +642,9 @@ function runGrid(): void {
 
 function runSector(): void {
   if (phase !== 'idle') return;
+  // Moser-R mode (curved boundary already built): skip the
+  // spirals/edges split and shoot all 4K boundary samples in one batch.
+  if (rArcs) { runRSector(); return; }
   canvas.setVMax(cfg.vMax);
   polygonNodes.length = 0;
   heap.length = 0;
@@ -629,6 +674,129 @@ function runSector(): void {
   });
   phase = 'sector-spirals';
   $('status').textContent = `tracing two τ-spirals (matched v)… ${2 * K} shots`;
+}
+
+// ---------- Moser-R curved sector ---------------------------------------
+
+// Build R from D₀ + (o₁, o₂) and store it as the active sector. Renders
+// the curved overlay; clicking "Compute sector image" then walks this
+// curve instead of the rectangle. Restricted to τc ∈ {0, 0.5} so D₁
+// is the reflection of D₀.
+function defineRFromBoundaries(): void {
+  if (d0Points.length < 4) {
+    $('status').textContent = 'compute D₀ first (then refine)';
+    return;
+  }
+  if (!isSectorSymmetric()) {
+    $('status').textContent = 'R from D₀/D₁ only works at τc = 0 or 0.5';
+    return;
+  }
+  // Convert d0Points (sorted by tau) to CurvePoint[].
+  const d0Curve = d0Points
+    .filter((p) => isFinite(p.vEsc))
+    .map((p) => ({ tau: p.tau, v: p.vEsc }));
+  // P_a is at (τc, v_esc(τc)) — find via nearest lookup.
+  const tauC = ((cfg.tauC % 1) + 1) % 1;
+  let pV = d0Curve[0].v;
+  let best = Infinity;
+  for (const p of d0Curve) {
+    const d = Math.abs(p.tau - tauC);
+    if (d < best) { best = d; pV = p.v; }
+  }
+  const K = Math.max(8, Math.round(cfg.k / 4));
+  const r = computeR(d0Curve, cfg.o1, cfg.o2, K, { tau: tauC, v: pV });
+  if ('error' in r) {
+    $('status').textContent = `R: ${r.error}`;
+    return;
+  }
+  rArcs = r.arcs;
+  rArcLen = K;
+  // Render curved overlay; hide rectangle overlay.
+  const closed = ([] as { tau: number; v: number }[])
+    .concat(r.arcs[0], r.arcs[1], r.arcs[2], r.arcs[3]);
+  canvas.setSectorCurve(closed);
+  zoom.setSectorCurve(closed);
+  applySector(null);
+  invalidatePolygon();
+  $('status').textContent =
+    `R from D₀/D₁: 4×${K} boundary samples (o₁=${cfg.o1}, o₂=${cfg.o2})`;
+  updateRModeButtons();
+}
+
+function clearRSector(): void {
+  rArcs = null;
+  rArcLen = 0;
+  canvas.setSectorCurve(null);
+  zoom.setSectorCurve(null);
+  updateSectorDisplay();   // restore rectangle overlay
+  invalidatePolygon();
+  updateRModeButtons();
+}
+
+function updateRModeButtons(): void {
+  const def = document.getElementById('define-r') as HTMLButtonElement | null;
+  const clr = document.getElementById('clear-r') as HTMLButtonElement | null;
+  if (def) def.disabled = d0Points.length < 4 || !isSectorSymmetric();
+  if (clr) clr.disabled = rArcs === null;
+}
+
+function runRSector(): void {
+  if (phase !== 'idle' || !rArcs) return;
+  canvas.setVMax(cfg.vMax);
+  polygonNodes.length = 0;
+  heap.length = 0;
+  pending = [];
+  effVE = cfg.vE; // unused in curved mode but harmless
+  const arcs = rArcs;
+  const K = rArcLen;
+  spiralK = K;     // boundary samples per arc — reuse the field
+  edgeKtau = K;
+
+  // 4 K shots in s order: arc0, arc1, arc2, arc3.
+  const tau0s: number[] = [];
+  const v0s: number[] = [];
+  for (let a = 0; a < 4; a++) {
+    for (let k = 0; k < K; k++) {
+      tau0s.push(arcs[a][k].tau);
+      v0s.push(arcs[a][k].v);
+    }
+  }
+  const w = ensureWorker();
+  w.postMessage({
+    type: 'shoot',
+    req: { e: cfg.e, maxPeriods: cfg.maxPeriods, tau0s, v0s },
+  });
+  phase = 'r-sector';
+  $('status').textContent = `tracing R boundary… ${4 * K} shots`;
+}
+
+function consumeRSectorResults(
+  tauStars: Float32Array, vStars: Float32Array, escapes: Uint8Array,
+): void {
+  if (!rArcs) { phase = 'idle'; killWorker(); return; }
+  const arcs = rArcs;
+  const K = rArcLen;
+  polygonNodes.length = 0;
+  let escCount = 0;
+  for (let a = 0; a < 4; a++) {
+    for (let k = 0; k < K; k++) {
+      const idx = a * K + k;
+      const isEsc = escapes[idx] === 1;
+      if (isEsc) escCount++;
+      const s = a + (K <= 1 ? 0 : k / (K - 1));
+      polygonNodes.push({
+        s, tau0: arcs[a][k].tau, v0: arcs[a][k].v,
+        tau: tauStars[idx], v: vStars[idx], escaped: isEsc,
+      });
+    }
+  }
+  polygonNodes.sort((a, b) => a.s - b.s);
+  redrawPolygon();
+  phase = 'idle';
+  killWorker();
+  const tag = escCount > 0 ? `, ${escCount} escaped` : '';
+  $('status').textContent =
+    `R sector image: N=${polygonNodes.length}${tag} — click Refine to subdivide`;
 }
 
 function consumeSpiralResults(
@@ -1213,6 +1381,7 @@ function applyBoundary(): void {
   const pts = d0Points.map((p) => ({ tau: p.tau, v: p.vEsc }));
   canvas.setBoundaryD0(pts);
   zoom.setBoundaryD0(pts);
+  updateRModeButtons();
 }
 
 function consumeBoundaryInitial(vEscs: Float32Array): void {
@@ -1349,6 +1518,8 @@ function onWorkerMsg(ev: MessageEvent<HorseshoeWorkerToMain>): void {
         consumeEdgeResults(tauStars, vStars, escapes);
       } else if (phase === 'sector-refining') {
         consumeRefineResults(tauStars, vStars, escapes);
+      } else if (phase === 'r-sector') {
+        consumeRSectorResults(tauStars, vStars, escapes);
       } else if (phase === 'vk-spirals') {
         consumeVkSpiralResults(tauStars, vStars, escapes);
       } else if (phase === 'vk-edges') {
