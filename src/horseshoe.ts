@@ -1478,8 +1478,9 @@ function startShapeMap(shape: Shape, via: 'forward' | 'backward'): void {
   if (shape.vertices.length === 0) return;
   ensureWorker();
   // Resample the source to N arc-length-spaced points so the image is
-  // smooth even when the user drew only a few vertices.
-  const N = Math.max(2, Math.min(20000, Math.round(shapeSampleN)));
+  // smooth even when the user drew only a few vertices. N comes from
+  // the source shape's per-shape sampleN.
+  const N = Math.max(2, Math.min(20000, Math.round(shape.sampleN)));
   const samples = shape.vertices.length >= 2
     ? resamplePolyline(shape.vertices, shape.closed, N)
     : shape.vertices.map((p) => ({ tau: p.tau, v: p.v }));
@@ -1522,6 +1523,9 @@ function consumeShapeMap(tauStars: Float32Array, vStars: Float32Array, escapes: 
     vertices, closed: src.closed,
     parent: { id: src.id, via, iterates: parentIter },
     sourceVertices: samples.map((p) => ({ tau: p.tau, v: p.v })),
+    // Mapped children inherit their parent's per-shape N so successive
+    // iterates (φ², φ³, …) use the same resample density.
+    sampleN: src.sampleN,
   });
   shapeJob = null;
   mapSourceSamples = [];
@@ -1647,7 +1651,7 @@ function initShapesUI(): void {
     pen.classList.toggle('active', canvas.getPenMode());
   });
   canvas.onDrawCommit = (vertices, closed) => {
-    shapeStore.add({ vertices, closed });
+    shapeStore.add({ vertices, closed, sampleN: shapeSampleN });
     // Stay in pen mode so the user can keep drawing.
   };
 
@@ -1721,6 +1725,21 @@ function renderShapeList(): void {
     meta.className = 'parent-badge';
     meta.textContent = `n=${sh.vertices.length}${sh.closed ? '◯' : ''}`;
     row.appendChild(meta);
+
+    const nInput = document.createElement('input');
+    nInput.type = 'text';
+    nInput.value = String(sh.sampleN);
+    nInput.className = 'shape-n-input';
+    nInput.title = 'Resample to this many points before map (this shape only)';
+    nInput.addEventListener('change', () => {
+      const v = parseInt(nInput.value, 10);
+      if (isFinite(v) && v >= 2) {
+        shapeStore.update(sh.id, { sampleN: Math.min(20000, v) });
+      } else {
+        nInput.value = String(sh.sampleN);
+      }
+    });
+    row.appendChild(nInput);
 
     const vis = document.createElement('button');
     vis.className = 'vis';

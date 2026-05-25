@@ -10,6 +10,11 @@ export interface Shape {
   closed: boolean;                        // polygon if true, polyline if false
   color: string;                          // canvas-renderable colour string
   visible: boolean;
+  // Per-shape resample count used when this shape is forward/backward
+  // mapped. New shapes inherit the page's current default (the global
+  // "Samples / map (N)" input); mapped children inherit the parent's
+  // sampleN. Override per row to control map smoothness independently.
+  sampleN: number;
   // Optional lineage when this shape was created from another via φ.
   parent?: {
     id: ShapeId;
@@ -53,6 +58,7 @@ class ShapeStore {
     const name  = init.name  ?? `Shape ${this.shapes.length + 1}`;
     const shape: Shape = {
       id, name, color, visible: true,
+      sampleN: init.sampleN ?? 200,
       vertices: init.vertices,
       closed: init.closed,
       parent: init.parent,
@@ -212,6 +218,7 @@ export function deserializeShapes(text: string): Shape[] {
         throw new Error('vertex coords must be numbers');
       }
     }
+    if (typeof s.sampleN !== 'number') s.sampleN = 200;
   }
   return f.shapes;
 }

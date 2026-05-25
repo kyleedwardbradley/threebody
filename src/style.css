@@ -272,6 +272,15 @@ html, body {
 .shape-row .parent-badge {
   font-size: 9px; opacity: 0.65; padding: 0 3px;
 }
+.shape-row .shape-n-input {
+  width: 40px;
+  background: var(--bg-input); color: var(--text-primary);
+  border: 1px solid var(--border-input); border-radius: 2px;
+  padding: 1px 3px; font-size: 10px;
+  font-family: inherit; font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.shape-row .shape-n-input:focus { outline: none; border-color: var(--border-accent); }
 #pen-toggle.active {
   background: var(--bg-button-active); color: var(--text-secondary);
   border-color: var(--border-accent);
