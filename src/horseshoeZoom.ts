@@ -28,12 +28,10 @@ export class HorseshoeZoom {
   private spiralRight: PolygonPoint[] | null = null;
   private pPoints: { tau: number; v: number; label?: string }[] = [];
   private boundaryD0: { tau: number; v: number }[] | null = null;
-  // Curved sector boundary (Moser's R). When non-null, replaces the
-  // rectangle as the blue overlay.
-  private sectorCurve: { tau: number; v: number }[] | null = null;
   private showBoundaries = true;
   private vkPolygon: PolygonPoint[] | null = null;
   private showVk = false;
+  private shapes: ReadonlyArray<import('./shapes').Shape> = [];
   private showGrid = true;
   private showImage = false;
   private colorRange: { lo: number; hi: number } | null = null;
@@ -76,9 +74,6 @@ export class HorseshoeZoom {
   }
   clearGrid(): void { this.tauStars = null; this.vStars = null; this.draw(); }
   setSector(s: SectorRect | null): void { this.sector = s; this.draw(); }
-  setSectorCurve(pts: { tau: number; v: number }[] | null): void {
-    this.sectorCurve = pts; this.draw();
-  }
   setPolygon(pts: PolygonPoint[] | null): void { this.polygon = pts; this.draw(); }
   setSpiralPair(left: PolygonPoint[] | null, right: PolygonPoint[] | null): void {
     this.spiralLeft = left;
@@ -98,6 +93,9 @@ export class HorseshoeZoom {
   setShowBoundaries(on: boolean): void { this.showBoundaries = on; this.draw(); }
   setShowVk(on: boolean): void { this.showVk = on; this.draw(); }
   setVkPolygon(pts: PolygonPoint[] | null): void { this.vkPolygon = pts; this.draw(); }
+  setShapes(shapes: ReadonlyArray<import('./shapes').Shape>): void {
+    this.shapes = shapes; this.draw();
+  }
   setColorRange(lo: number, hi: number): void {
     if (!isFinite(lo) || !isFinite(hi) || hi <= lo) return;
     this.colorRange = { lo, hi };
@@ -236,34 +234,8 @@ export class HorseshoeZoom {
       ctx.restore();
     }
 
-    // Sector overlay. Curved Moser-R boundary takes precedence over the
-    // axis-aligned rectangle.
-    if (this.sectorCurve && this.sectorCurve.length > 2) {
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(p.x, p.y, p.w, p.h);
-      ctx.clip();
-      ctx.fillStyle = T.sectorFill;
-      ctx.strokeStyle = T.sectorStroke;
-      ctx.lineWidth = 1.2;
-      // Unwrap τ relative to the window centre, then close the loop.
-      const center = 0.5 * (this.range.tauMin + this.range.tauMax);
-      const first = this.sectorCurve[0];
-      let prevTauU = first.tau - Math.round(first.tau - center);
-      ctx.beginPath();
-      ctx.moveTo(this.toX(prevTauU), this.toY(first.v));
-      for (let i = 1; i < this.sectorCurve.length; i++) {
-        const pt = this.sectorCurve[i];
-        let delta = pt.tau - prevTauU;
-        delta -= Math.round(delta);
-        prevTauU = prevTauU + delta;
-        ctx.lineTo(this.toX(prevTauU), this.toY(pt.v));
-      }
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      ctx.restore();
-    } else if (this.sector) {
+    // Sector (blue rectangle).
+    if (this.sector) {
       const s = this.sector;
       const x0 = this.toX(s.tauS);
       const x1 = this.toX(s.tauE);
@@ -375,6 +347,12 @@ export class HorseshoeZoom {
     if (this.showBoundaries && this.boundaryD0 && this.boundaryD0.length > 1) {
       drawPolyline(this.boundaryD0, T.d0Line, 1.5, (t) => t, true);
       drawPolyline(this.boundaryD0, T.d1Line, 1.5, (t) => -t, true);
+    }
+
+    // User-drawn shapes: stroke each visible shape in its own colour.
+    for (const sh of this.shapes) {
+      if (!sh.visible || sh.vertices.length < 2) continue;
+      drawPolyline(sh.vertices, sh.color, 1.5, (t) => t, sh.closed);
     }
 
     // P markers — render at any τ-shift that lands inside the window.

@@ -91,24 +91,6 @@
           <input type="range" id="k" min="10" max="5000" step="1" value="3800" />
         </div>
 
-        <h2 class="section">Moser R (curved)</h2>
-        <div class="control">
-          <label><span>o₁ (thin / ⊥ D₀)</span>
-            <input type="text" id="o1-num" class="num" step="0.001" value="0.005" />
-          </label>
-          <input type="range" id="o1" min="0.0001" max="0.1" step="0.0001" value="0.005" />
-        </div>
-        <div class="control">
-          <label><span>o₂ (long / ⊥ D₁)</span>
-            <input type="text" id="o2-num" class="num" step="0.001" value="0.05" />
-          </label>
-          <input type="range" id="o2" min="0.001" max="0.5" step="0.001" value="0.05" />
-        </div>
-        <div class="buttons">
-          <button id="define-r" disabled>R from D₀/D₁</button>
-          <button id="clear-r" disabled>Clear R</button>
-        </div>
-
         <div class="buttons">
           <button id="run-sector">Compute sector image</button>
           <button id="refine-sector">Refine</button>
@@ -119,6 +101,22 @@
           <button id="refine-vk">Refine V_k</button>
           <button id="toggle-vk">Show V_k</button>
         </div>
+
+        <h2 class="section">Shapes</h2>
+        <div class="buttons">
+          <button id="pen-toggle">✎ Draw (Pen)</button>
+        </div>
+        <div id="shape-list" class="shape-list"></div>
+        <div class="buttons">
+          <button id="shapes-export">Export…</button>
+          <button id="shapes-import">Import…</button>
+          <input type="file" id="shapes-file" accept=".json,application/json" style="display:none" />
+        </div>
+        <p class="note">
+          Pen mode: click on the polar disc to add vertices. Click near
+          the first vertex (within 8 px) to close as a polygon, or
+          double-click / Esc to commit as an open polyline.
+        </p>
 
         <div id="status">ready</div>
 

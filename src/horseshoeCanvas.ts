@@ -76,10 +76,15 @@ export class HorseshoeCanvas {
   // Toggled with showVk; nothing is drawn unless vkPolygon is non-null.
   private vkPolygon: PolygonPoint[] | null = null;
   private showVk = false;
-  // Curved sector boundary (Moser's R) — when non-null, replaces the
-  // axis-aligned `sector` rectangle as the blue overlay. Points are a
-  // closed CCW polyline in (τ, v).
-  private sectorCurve: { tau: number; v: number }[] | null = null;
+  // User-drawn shapes overlay.
+  private shapes: ReadonlyArray<import('./shapes').Shape> = [];
+  // Pen-mode drawing state: when active, clicks add vertices to a draft
+  // shape rather than starting a zoom box. Draft committed (and pushed
+  // into the shape store) by onDrawCommit.
+  private penMode = false;
+  private drawDraft: { tau: number; v: number }[] = [];
+  private drawCursor: { tau: number; v: number } | null = null;
+  onDrawCommit: ((vertices: { tau: number; v: number }[], closed: boolean) => void) | null = null;
   private showGrid = true;
   private showImage = false;
 
@@ -128,23 +133,34 @@ export class HorseshoeCanvas {
     this.canvas.addEventListener('mousemove', (e) => this.onMouseMove(e));
     this.canvas.addEventListener('mouseup',   (e) => this.onMouseUp(e));
     this.canvas.addEventListener('mouseleave', () => this.onMouseLeave());
+    this.canvas.addEventListener('dblclick',  (e) => this.onDblClick(e));
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && this.penMode) this.commitDraft(false);
+    });
   }
   private mousePos(e: MouseEvent): { x: number; y: number } {
     const rect = this.canvas.getBoundingClientRect();
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   }
   private onMouseDown(e: MouseEvent): void {
+    if (this.penMode) { this.penClick(this.mousePos(e)); return; }
     if (!this.zoomToolActive) return;
     this.dragStart = this.mousePos(e);
     this.dragEnd = this.dragStart;
     this.draw();
   }
   private onMouseMove(e: MouseEvent): void {
+    if (this.penMode) {
+      this.drawCursor = this.screenToTauV(this.mousePos(e).x, this.mousePos(e).y);
+      this.draw();
+      return;
+    }
     if (!this.zoomToolActive || !this.dragStart) return;
     this.dragEnd = this.mousePos(e);
     this.draw();
   }
   private onMouseUp(e: MouseEvent): void {
+    if (this.penMode) return;
     if (!this.zoomToolActive || !this.dragStart) return;
     const end = this.mousePos(e);
     const start = this.dragStart;
@@ -155,11 +171,37 @@ export class HorseshoeCanvas {
     this.draw();
   }
   private onMouseLeave(): void {
+    if (this.penMode) { this.drawCursor = null; this.draw(); return; }
     if (this.dragStart) {
       this.dragStart = null;
       this.dragEnd = null;
       this.draw();
     }
+  }
+  private onDblClick(_e: MouseEvent): void {
+    if (this.penMode) this.commitDraft(false);
+  }
+  private penClick(pos: { x: number; y: number }): void {
+    const SNAP_PX = 8;  // shapes.CLOSURE_SNAP_PX — kept local to avoid import cycle
+    // If close to first vertex (in screen px) and ≥ 3 vertices already, close.
+    if (this.drawDraft.length >= 3) {
+      const first = this.tauVToScreen(this.drawDraft[0].tau, this.drawDraft[0].v);
+      if (Math.hypot(pos.x - first.x, pos.y - first.y) < SNAP_PX) {
+        this.commitDraft(true);
+        return;
+      }
+    }
+    const p = this.screenToTauV(pos.x, pos.y);
+    this.drawDraft.push(p);
+    this.draw();
+  }
+  private commitDraft(closed: boolean): void {
+    if (this.drawDraft.length >= 2 && this.onDrawCommit) {
+      this.onDrawCommit(this.drawDraft.slice(), closed);
+    }
+    this.drawDraft.length = 0;
+    this.drawCursor = null;
+    this.draw();
   }
 
   // ----- screen ↔ natural canvas conversion (for viewport zoom) -----
@@ -233,9 +275,6 @@ export class HorseshoeCanvas {
   // ----- overlays -----
 
   setSector(s: SectorRect | null): void { this.sector = s; this.draw(); }
-  setSectorCurve(pts: { tau: number; v: number }[] | null): void {
-    this.sectorCurve = pts; this.draw();
-  }
   setPolygon(pts: PolygonPoint[] | null): void { this.polygon = pts; this.draw(); }
   setSpiralPair(left: PolygonPoint[] | null, right: PolygonPoint[] | null): void {
     this.spiralLeft = left;
@@ -255,6 +294,60 @@ export class HorseshoeCanvas {
   setShowVk(on: boolean): void { this.showVk = on; this.draw(); }
   setVkPolygon(pts: PolygonPoint[] | null): void { this.vkPolygon = pts; this.draw(); }
   hasVkPolygon(): boolean { return this.vkPolygon !== null; }
+
+  // User-shape overlay + pen mode.
+  setShapes(shapes: ReadonlyArray<import('./shapes').Shape>): void {
+    this.shapes = shapes; this.draw();
+  }
+  setPenMode(on: boolean): void {
+    this.penMode = on;
+    this.canvas.style.cursor = on ? 'crosshair' : '';
+    if (!on) { this.drawDraft.length = 0; this.drawCursor = null; this.draw(); }
+  }
+  getPenMode(): boolean { return this.penMode; }
+  // Convert a screen (x, y) inside the polar canvas into the (τ, v)
+  // coordinates the disc represents at this zoom level. The inverse of
+  // angleOf/radiusOf in drawPolar, accounting for the viewport zoom
+  // transform.
+  screenToTauV(sx: number, sy: number): { tau: number; v: number } {
+    const w = this.canvas.clientWidth;
+    const h = this.canvas.clientHeight;
+    const R = Math.max(0, Math.min(w, h) / 2 - 28);
+    const cx = w / 2, cy = h / 2;
+    // Undo the viewport zoom: drawPolar applies scale + translate; for
+    // the click to land at the right (τ, v) we must invert that.
+    let bx = sx, by = sy;
+    if (this.viewRect) {
+      const r = this.viewRect;
+      const sxScale = w / r.w, syScale = h / r.h;
+      bx = sx / sxScale + r.x;
+      by = sy / syScale + r.y;
+    }
+    const dx = bx - cx, dy = by - cy;
+    const rad = Math.hypot(dx, dy);
+    const ang = Math.atan2(dy, dx);
+    const v = (rad / R) * this.vMax;
+    // angleOf returns tau * 2π - π/2, so tau = (ang + π/2) / (2π) mod 1.
+    let tau = (ang + Math.PI / 2) / (2 * Math.PI);
+    tau = ((tau % 1) + 1) % 1;
+    return { tau, v };
+  }
+  tauVToScreen(tau: number, v: number): { x: number; y: number } {
+    const w = this.canvas.clientWidth;
+    const h = this.canvas.clientHeight;
+    const R = Math.max(0, Math.min(w, h) / 2 - 28);
+    const cx = w / 2, cy = h / 2;
+    const r = (v / this.vMax) * R;
+    const a = tau * 2 * Math.PI - Math.PI / 2;
+    let x = cx + r * Math.cos(a);
+    let y = cy + r * Math.sin(a);
+    if (this.viewRect) {
+      const vr = this.viewRect;
+      x = (x - vr.x) * (w / vr.w);
+      y = (y - vr.y) * (h / vr.h);
+    }
+    return { x, y };
+  }
   getShowVk(): boolean { return this.showVk; }
   setVMax(v: number): void {
     if (!isFinite(v) || v <= 0) return;
@@ -597,29 +690,8 @@ export class HorseshoeCanvas {
       ctx.fillText(months[m], cx + (R + 14) * Math.cos(a), cy + (R + 14) * Math.sin(a));
     }
 
-    // Sector overlay. If a curved boundary has been set (Moser-R mode),
-    // draw the closed polyline instead of the axis-aligned annular wedge.
-    if (this.sectorCurve && this.sectorCurve.length > 2) {
-      ctx.fillStyle = T.sectorFill;
-      ctx.strokeStyle = T.sectorStroke;
-      ctx.lineWidth = lw(1.2);
-      ctx.beginPath();
-      let started = false;
-      for (const p of this.sectorCurve) {
-        if (!isFinite(p.tau) || !isFinite(p.v)) { started = false; continue; }
-        if (!vIn(p.v)) { started = false; continue; }
-        const rad = radiusOf(p.v);
-        if (rad < 0 || rad > R) { started = false; continue; }
-        const a = angleOf(unwrap(p.tau));
-        const x = cx + rad * Math.cos(a);
-        const y = cy + rad * Math.sin(a);
-        if (started) ctx.lineTo(x, y); else ctx.moveTo(x, y);
-        started = true;
-      }
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-    } else if (this.sector) {
+    // Sector overlay (annular wedge in natural polar coords).
+    if (this.sector) {
       const s = this.sector;
       const rIn = Math.max(0, Math.min(R, radiusOf(s.vS)));
       const rOut = Math.max(0, Math.min(R, radiusOf(s.vE)));
@@ -711,6 +783,96 @@ export class HorseshoeCanvas {
       };
       drawCurve(T.d0Line, (t) => t);            // ∂D₀
       drawCurve(T.d1Line, (t) => -t);           // ∂D₁ = reflection
+    }
+
+    // User-drawn shapes overlay. Each shape strokes its vertices as a
+    // polyline (or closed polygon) in its own colour. Vertex dots help
+    // pick out short shapes.
+    if (this.shapes.length > 0) {
+      for (const sh of this.shapes) {
+        if (!sh.visible || sh.vertices.length < 1) continue;
+        ctx.strokeStyle = sh.color;
+        ctx.fillStyle = sh.color;
+        ctx.lineWidth = lw(1.5);
+        if (sh.vertices.length >= 2) {
+          ctx.beginPath();
+          let started = false;
+          for (const pt of sh.vertices) {
+            if (!isFinite(pt.tau) || !isFinite(pt.v)) { started = false; continue; }
+            if (!vIn(pt.v)) { started = false; continue; }
+            const rad = radiusOf(pt.v);
+            if (rad < 0 || rad > R + 2) { started = false; continue; }
+            const a = angleOf(unwrap(pt.tau));
+            const x = cx + rad * Math.cos(a);
+            const y = cy + rad * Math.sin(a);
+            if (started) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+            started = true;
+          }
+          if (sh.closed) ctx.closePath();
+          ctx.stroke();
+        }
+        // Vertex dots.
+        for (const pt of sh.vertices) {
+          if (!vIn(pt.v)) continue;
+          const rad = radiusOf(pt.v);
+          if (rad < 0 || rad > R) continue;
+          const a = angleOf(unwrap(pt.tau));
+          const x = cx + rad * Math.cos(a);
+          const y = cy + rad * Math.sin(a);
+          ctx.beginPath();
+          ctx.arc(x, y, lw(2), 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+
+    // Pen-mode draft: in-progress polyline + preview rubber-band line
+    // to the cursor. The first vertex shows a hollow ring so the user
+    // can aim to close the shape.
+    if (this.penMode && this.drawDraft.length > 0) {
+      ctx.strokeStyle = 'rgba(255, 220, 80, 0.95)';
+      ctx.fillStyle = 'rgba(255, 220, 80, 0.95)';
+      ctx.lineWidth = lw(1.2);
+      ctx.beginPath();
+      let started = false;
+      for (const pt of this.drawDraft) {
+        if (!vIn(pt.v)) { started = false; continue; }
+        const rad = radiusOf(pt.v);
+        const a = angleOf(unwrap(pt.tau));
+        const x = cx + rad * Math.cos(a);
+        const y = cy + rad * Math.sin(a);
+        if (started) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+        started = true;
+      }
+      // Rubber band to cursor.
+      if (started && this.drawCursor && vIn(this.drawCursor.v)) {
+        const rad = radiusOf(this.drawCursor.v);
+        const a = angleOf(unwrap(this.drawCursor.tau));
+        ctx.lineTo(cx + rad * Math.cos(a), cy + rad * Math.sin(a));
+      }
+      ctx.setLineDash([4, 3]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // Vertex dots.
+      for (const pt of this.drawDraft) {
+        if (!vIn(pt.v)) continue;
+        const rad = radiusOf(pt.v);
+        const a = angleOf(unwrap(pt.tau));
+        ctx.beginPath();
+        ctx.arc(cx + rad * Math.cos(a), cy + rad * Math.sin(a), lw(3), 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Hollow ring on first vertex (closure target).
+      if (this.drawDraft.length >= 3) {
+        const first = this.drawDraft[0];
+        if (vIn(first.v)) {
+          const rad = radiusOf(first.v);
+          const a = angleOf(unwrap(first.tau));
+          ctx.beginPath();
+          ctx.arc(cx + rad * Math.cos(a), cy + rad * Math.sin(a), lw(6), 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
     }
 
     // P markers

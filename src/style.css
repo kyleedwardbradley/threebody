@@ -239,6 +239,44 @@ html, body {
 }
 .note { margin-top: 12px; font-size: 10.5px; opacity: 0.55; line-height: 1.5; }
 
+/* Shape list (horseshoe page) */
+.shape-list { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; max-height: 240px; overflow-y: auto; }
+.shape-row {
+  display: flex; align-items: center; gap: 4px;
+  padding: 4px 6px; border: 1px solid var(--border); border-radius: 3px;
+  background: var(--bg-button); font-size: 11px;
+}
+.shape-row .sw {
+  width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0;
+  border: 1px solid var(--border-input);
+  cursor: pointer;
+}
+.shape-row .name {
+  flex: 1; background: transparent; border: none; color: var(--text-primary);
+  font-family: inherit; font-size: 11px; padding: 0 2px;
+  min-width: 0;
+}
+.shape-row .name:focus { outline: 1px solid var(--border-accent); }
+.shape-row .vis {
+  background: transparent; border: none; cursor: pointer; padding: 0 4px;
+  color: var(--text-muted); font-size: 12px;
+}
+.shape-row .act {
+  background: var(--bg-button); color: var(--text-primary);
+  border: 1px solid var(--border-input); border-radius: 2px;
+  padding: 1px 5px; font-size: 10px; cursor: pointer;
+  font-family: inherit;
+}
+.shape-row .act:hover { background: var(--bg-button-hover); }
+.shape-row .act:disabled { opacity: 0.35; cursor: not-allowed; }
+.shape-row .parent-badge {
+  font-size: 9px; opacity: 0.65; padding: 0 3px;
+}
+#pen-toggle.active {
+  background: var(--bg-button-active); color: var(--text-secondary);
+  border-color: var(--border-accent);
+}
+
 #main {
   display: grid;
   grid-template-columns: 1fr 1fr;
