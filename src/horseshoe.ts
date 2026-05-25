@@ -1439,7 +1439,12 @@ initShapesUI();
 // image. Shape list is rendered into #shape-list and lives in shapeStore.
 // ============================================================================
 
-import { shapeStore, type Shape, type ShapeId, serializeShapes, deserializeShapes, SHAPE_REFINE_PX } from './shapes';
+import { shapeStore, type Shape, type ShapeId, serializeShapes, deserializeShapes, resamplePolyline, SHAPE_REFINE_PX } from './shapes';
+
+// Global setting for shape map operations: source curve is resampled to
+// this many points (arc-length spaced in (τ, v)) before each map. Higher
+// values give a smoother forward/backward image but cost more shots.
+let shapeSampleN = 200;
 
 // In-flight per-shape worker job. Only one job runs at a time across
 // sector / V_k / shape phases.
@@ -1463,13 +1468,25 @@ function rho(tau: number): number {
   return t;
 }
 
+// Per-map state: the resampled source positions used to seed this map.
+// Captured at startShapeMap and stored on the child shape so refinement
+// has a 1:1 source-vertex array for edge bisection.
+let mapSourceSamples: { tau: number; v: number }[] = [];
+
 function startShapeMap(shape: Shape, via: 'forward' | 'backward'): void {
   if (phase !== 'idle') return;
   if (shape.vertices.length === 0) return;
   ensureWorker();
+  // Resample the source to N arc-length-spaced points so the image is
+  // smooth even when the user drew only a few vertices.
+  const N = Math.max(2, Math.min(20000, Math.round(shapeSampleN)));
+  const samples = shape.vertices.length >= 2
+    ? resamplePolyline(shape.vertices, shape.closed, N)
+    : shape.vertices.map((p) => ({ tau: p.tau, v: p.v }));
+  mapSourceSamples = samples;
   const tau0s: number[] = [];
   const v0s: number[] = [];
-  for (const p of shape.vertices) {
+  for (const p of samples) {
     tau0s.push(via === 'forward' ? p.tau : rho(p.tau));
     v0s.push(p.v);
   }
@@ -1479,7 +1496,7 @@ function startShapeMap(shape: Shape, via: 'forward' | 'backward'): void {
     req: { e: cfg.e, maxPeriods: cfg.maxPeriods, tau0s, v0s },
   });
   $('status').textContent =
-    `mapping shape '${shape.name}' ${via} … ${shape.vertices.length} shots`;
+    `mapping shape '${shape.name}' ${via} … ${samples.length} shots`;
 }
 
 function consumeShapeMap(tauStars: Float32Array, vStars: Float32Array, escapes: Uint8Array): void {
@@ -1487,8 +1504,9 @@ function consumeShapeMap(tauStars: Float32Array, vStars: Float32Array, escapes: 
   const src = shapeStore.get(shapeJob.shapeId);
   if (!src) { shapeJob = null; return; }
   const via = shapeJob.via!;
+  const samples = mapSourceSamples;
   const vertices: { tau: number; v: number }[] = [];
-  for (let i = 0; i < src.vertices.length; i++) {
+  for (let i = 0; i < samples.length; i++) {
     if (escapes[i] === 1) {
       vertices.push({ tau: NaN, v: NaN });
       continue;
@@ -1503,9 +1521,11 @@ function consumeShapeMap(tauStars: Float32Array, vStars: Float32Array, escapes: 
     name: `${tag}${itStr}(${src.name})`,
     vertices, closed: src.closed,
     parent: { id: src.id, via, iterates: parentIter },
+    sourceVertices: samples.map((p) => ({ tau: p.tau, v: p.v })),
   });
   shapeJob = null;
-  $('status').textContent = `mapped '${src.name}' ${via}`;
+  mapSourceSamples = [];
+  $('status').textContent = `mapped '${src.name}' ${via} (${samples.length} samples)`;
 }
 
 // Refinement: walk the forward image, bisect source edges whose image
@@ -1520,15 +1540,19 @@ function startShapeRefine(shape: Shape): void {
     $('status').textContent = `no forward image of '${shape.name}' — click → first`;
     return;
   }
-  if (shape.vertices.length !== img.vertices.length) {
-    $('status').textContent = `'${shape.name}' and its image have drifted out of sync; remap and retry`;
+  const srcSamples = img.sourceVertices;
+  if (!srcSamples || srcSamples.length !== img.vertices.length) {
+    $('status').textContent = `'${img.name}' is missing the source-sample track; remap and retry`;
     return;
   }
-  // Walk image edges, find those above the threshold IN SCREEN PIXELS.
+  // Walk image edges, find those above the threshold in SCREEN PIXELS.
+  // For each long edge, bisect the matching source-sample edge — its
+  // midpoint shot through φ gives the new image vertex.
+  const via: 'forward' | 'backward' = img.parent?.via ?? 'forward';
   const threshold = SHAPE_REFINE_PX;
   const candidates: { sourceEdge: number; sMid: { tau: number; v: number } }[] = [];
   const N = img.vertices.length;
-  const last = shape.closed ? N : N - 1;
+  const last = img.closed ? N : N - 1;
   for (let i = 0; i < last; i++) {
     const a = img.vertices[i];
     const b = img.vertices[(i + 1) % N];
@@ -1537,38 +1561,38 @@ function startShapeRefine(shape: Shape): void {
     const pb = screenXY(b.tau, b.v);
     const d = Math.hypot(pb.x - pa.x, pb.y - pa.y);
     if (d <= threshold) continue;
-    // Bisect the SOURCE edge i; midpoint = average of source vertices.
-    const sa = shape.vertices[i];
-    const sb = shape.vertices[(i + 1) % N];
-    candidates.push({
-      sourceEdge: i,
-      sMid: { tau: 0.5 * (sa.tau + sb.tau), v: 0.5 * (sa.v + sb.v) },
-    });
+    const sa = srcSamples[i];
+    const sb = srcSamples[(i + 1) % N];
+    // Midpoint in (τ, v), unwrapping τ across the seam.
+    let dt = sb.tau - sa.tau;
+    dt -= Math.round(dt);
+    const midTau = ((sa.tau + dt / 2) % 1 + 1) % 1;
+    const midV = 0.5 * (sa.v + sb.v);
+    candidates.push({ sourceEdge: i, sMid: { tau: midTau, v: midV } });
   }
   if (candidates.length === 0) {
     $('status').textContent = `'${shape.name}' image fully refined`;
     return;
   }
   ensureWorker();
-  const tau0s = candidates.map((c) => c.sMid.tau);
+  const tau0s = candidates.map((c) => via === 'forward' ? c.sMid.tau : rho(c.sMid.tau));
   const v0s = candidates.map((c) => c.sMid.v);
-  shapeJob = { kind: 'refine', shapeId: shape.id, refinePending: candidates };
+  shapeJob = { kind: 'refine', shapeId: img.id, refinePending: candidates };
   worker!.postMessage({
     type: 'shoot',
     req: { e: cfg.e, maxPeriods: cfg.maxPeriods, tau0s, v0s },
   });
   $('status').textContent =
-    `refining '${shape.name}' image: ${candidates.length} mid-edge shots`;
+    `refining '${img.name}': ${candidates.length} mid-edge shots`;
 }
 
 function consumeShapeRefine(tauStars: Float32Array, vStars: Float32Array, escapes: Uint8Array): void {
   if (!shapeJob || shapeJob.kind !== 'refine' || !shapeJob.refinePending) return;
-  const src = shapeStore.get(shapeJob.shapeId);
-  const img = src ? findForwardImage(src.id) : null;
-  if (!src || !img) { shapeJob = null; return; }
-  // Build new source + image vertex lists by walking edges and inserting
-  // bisection midpoints between the endpoints of each refined edge. Done
-  // in REVERSE source-edge order so earlier indices stay valid.
+  const img = shapeStore.get(shapeJob.shapeId);
+  if (!img || !img.sourceVertices) { shapeJob = null; return; }
+  const via: 'forward' | 'backward' = img.parent?.via ?? 'forward';
+  // Build new source-sample + image vertex lists by walking edges in
+  // REVERSE source-edge order so earlier indices stay valid as we splice.
   const refined = shapeJob.refinePending
     .map((c, i) => ({
       sourceEdge: c.sourceEdge,
@@ -1578,19 +1602,21 @@ function consumeShapeRefine(tauStars: Float32Array, vStars: Float32Array, escape
       v: vStars[i],
     }))
     .sort((a, b) => b.sourceEdge - a.sourceEdge);
-  const srcV = src.vertices.slice();
+  const srcV = img.sourceVertices.slice();
   const imgV = img.vertices.slice();
   let added = 0;
   for (const r of refined) {
     if (r.escaped) continue;
+    const t = via === 'forward' ? r.tau : rho(r.tau);
     srcV.splice(r.sourceEdge + 1, 0, r.sMid);
-    imgV.splice(r.sourceEdge + 1, 0, { tau: r.tau, v: r.v });
+    imgV.splice(r.sourceEdge + 1, 0, { tau: t, v: r.v });
     added++;
   }
-  shapeStore.replaceVertices(src.id, srcV);
+  // Update image shape (vertices) and its sourceVertices in lockstep.
+  shapeStore.update(img.id, { sourceVertices: srcV });
   shapeStore.replaceVertices(img.id, imgV);
   shapeJob = null;
-  $('status').textContent = `refined '${src.name}' image: +${added} samples`;
+  $('status').textContent = `refined '${img.name}': +${added} samples (now ${imgV.length})`;
 }
 
 function findForwardImage(parentId: ShapeId): Shape | null {
@@ -1610,6 +1636,11 @@ function findForwardImage(parentId: ShapeId): Shape | null {
 // ----- Shape list UI -----
 
 function initShapesUI(): void {
+  // Sample-count input drives the global shapeSampleN.
+  bindNumeric('shape-n', 'shape-n-num',
+    { toNum: (v) => Math.round(v).toString(),
+      clamp: (v) => Math.max(2, Math.min(20000, Math.round(v))) },
+    (v) => { shapeSampleN = v; });
   const pen = $<HTMLButtonElement>('pen-toggle');
   pen.addEventListener('click', () => {
     canvas.setPenMode(!canvas.getPenMode());

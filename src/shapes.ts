@@ -16,6 +16,12 @@ export interface Shape {
     via: 'forward' | 'backward';
     iterates: number;  // total composed iterates: 1 for first map, 2 for φ², etc.
   };
+  // Per-vertex source-sample positions captured at map time. Only set on
+  // mapped (child) shapes. Refinement bisects edges of `sourceVertices`
+  // — these are the resampled positions on the original source curve
+  // (arc-length spaced) that were shot to produce each `vertices` entry.
+  // Always satisfies sourceVertices.length === vertices.length.
+  sourceVertices?: { tau: number; v: number }[];
 }
 
 // Colour palette for fresh shapes — readable on both dark and light
@@ -50,6 +56,7 @@ class ShapeStore {
       vertices: init.vertices,
       closed: init.closed,
       parent: init.parent,
+      sourceVertices: init.sourceVertices,
     };
     this.shapes.push(shape);
     this.emit();
@@ -96,6 +103,75 @@ export const CLOSURE_SNAP_PX = 8;
 
 // Default per-shape refinement target (forward-image segment ≤ this).
 export const SHAPE_REFINE_PX = 1;
+
+// Resample a polyline (or closed polygon) to N points by arc length in
+// (τ, v) space, treating each consecutive pair as a straight segment.
+// τ is unwrapped relative to the previous vertex (each step in (-0.5,
+// 0.5]) so the arc length is correct across the τ=0 seam.
+//
+// For closed shapes the resampling spans the closing edge too (the
+// implicit chord from last vertex back to first) and returns N distinct
+// vertices distributed around the loop.
+//
+// If verts.length < 2 returns a copy of verts (nothing to interpolate).
+export function resamplePolyline(
+  verts: { tau: number; v: number }[],
+  closed: boolean,
+  N: number,
+): { tau: number; v: number }[] {
+  if (verts.length < 2 || N < 2) {
+    return verts.map((p) => ({ tau: p.tau, v: p.v }));
+  }
+  // Build unwrapped representation: keep tau on a continuous line so
+  // arc length is accurate; we'll re-wrap when returning the resamples.
+  const n = verts.length;
+  const uw: { tau: number; v: number }[] = [{ tau: verts[0].tau, v: verts[0].v }];
+  for (let i = 1; i < n; i++) {
+    let dt = verts[i].tau - uw[i - 1].tau;
+    dt -= Math.round(dt);
+    uw.push({ tau: uw[i - 1].tau + dt, v: verts[i].v });
+  }
+  if (closed) {
+    let dt = verts[0].tau - uw[n - 1].tau;
+    dt -= Math.round(dt);
+    uw.push({ tau: uw[n - 1].tau + dt, v: verts[0].v });
+  }
+  // Cumulative arc length.
+  const cum: number[] = [0];
+  for (let i = 1; i < uw.length; i++) {
+    cum.push(cum[i - 1] + Math.hypot(
+      uw[i].tau - uw[i - 1].tau,
+      uw[i].v - uw[i - 1].v,
+    ));
+  }
+  const total = cum[cum.length - 1];
+  if (total === 0) {
+    return Array.from({ length: N }, () => ({ tau: verts[0].tau, v: verts[0].v }));
+  }
+  // For closed shapes, N samples cover the full loop with the last
+  // distinct from the first (parametric spacing total / N). For open
+  // polylines, N samples from start to end inclusive (spacing total / (N-1)).
+  const step = closed ? (total / N) : (total / (N - 1));
+  const out: { tau: number; v: number }[] = new Array(N);
+  let cursor = 0;
+  const wrap1 = (t: number) => ((t % 1) + 1) % 1;
+  for (let k = 0; k < N; k++) {
+    const target = k * step;
+    while (cursor < cum.length - 1 && cum[cursor + 1] < target) cursor++;
+    if (cursor >= cum.length - 1) {
+      out[k] = { tau: wrap1(uw[uw.length - 1].tau), v: uw[uw.length - 1].v };
+      continue;
+    }
+    const c0 = cum[cursor], c1 = cum[cursor + 1];
+    const t = c1 > c0 ? (target - c0) / (c1 - c0) : 0;
+    const p0 = uw[cursor], p1 = uw[cursor + 1];
+    out[k] = {
+      tau: wrap1(p0.tau + t * (p1.tau - p0.tau)),
+      v:   p0.v + t * (p1.v - p0.v),
+    };
+  }
+  return out;
+}
 
 // Schema for the JSON file format (export/import).
 export interface ShapesFile {
