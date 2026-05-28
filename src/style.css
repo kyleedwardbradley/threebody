@@ -251,9 +251,9 @@ html, body {
 .note { margin-top: 12px; font-size: 10.5px; opacity: 0.55; line-height: 1.5; }
 
 /* Shape list (horseshoe page) */
-.shape-list { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; max-height: 240px; overflow-y: auto; }
+.shape-list { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; max-height: 240px; overflow-y: auto; overflow-x: hidden; }
 .shape-row {
-  display: flex; align-items: center; gap: 4px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 3px;
   padding: 4px 6px; border: 1px solid var(--border); border-radius: 3px;
   background: var(--bg-button); font-size: 11px;
 }
@@ -263,9 +263,9 @@ html, body {
   cursor: pointer;
 }
 .shape-row .name {
-  flex: 1; background: transparent; border: none; color: var(--text-primary);
+  flex: 1 1 60px; background: transparent; border: none; color: var(--text-primary);
   font-family: inherit; font-size: 11px; padding: 0 2px;
-  min-width: 0;
+  min-width: 50px;
 }
 .shape-row .name:focus { outline: 1px solid var(--border-accent); }
 .shape-row .vis {

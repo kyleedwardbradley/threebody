@@ -111,7 +111,8 @@ type Phase = 'idle' | 'grid'
   | 'vk-edges'         // V_k: shoot reflected sector's top + bottom connectors
   | 'vk-refining'      // V_k: round-based refinement on V_k boundary
   | 'boundary-initial' // initial K-sample ∂D₀ bisection
-  | 'boundary-refining'; // adaptive refinement of ∂D₀ at screen scale
+  | 'boundary-refining' // adaptive refinement of ∂D₀ at screen scale
+  | 'preimage';        // φ⁻¹(∂D₀): reflect-shoot-reflect the escape curve
 let phase: Phase = 'idle';
 
 // ---------- ∂D₀ / ∂D₁ boundary ----------
@@ -122,6 +123,10 @@ interface D0Gap { tauA: number; vA: number; tauB: number; vB: number; dist: numb
 const d0Points: D0Point[] = [];   // sorted by tau ∈ [0, 1)
 const d0Heap: D0Gap[] = [];       // max-heap on screen dist
 let d0Pending: { tauMid: number; gap: D0Gap }[] = [];
+// φ⁻¹(∂D₀): first preimage of the escape curve, in the SAME order as the
+// d0Points snapshot it was shot from (folded manifold arc; NaN entries
+// mark source points whose reflected shoot escaped forward).
+const d0PrePoints: { tau: number; v: number }[] = [];
 const D0_INITIAL_K = 64;
 const D0_BATCH = 8;
 const D0_CAP = 5000;
@@ -386,6 +391,7 @@ $('toggle-image').addEventListener('click', () => {
 });
 $('run-boundaries').addEventListener('click', () => runBoundaries());
 $('refine-boundaries').addEventListener('click', () => startBoundaryRefinement());
+$('preimage-boundaries').addEventListener('click', () => runPreimage());
 $('toggle-boundaries').addEventListener('click', () => {
   const next = !canvas.getShowBoundaries();
   canvas.setShowBoundaries(next);
@@ -477,7 +483,10 @@ $('reset').addEventListener('click', () => {
   applyPPoints([]);
   canvas.setBoundaryD0(null);
   zoom.setBoundaryD0(null);
+  canvas.setBoundaryPre(null);
+  zoom.setBoundaryPre(null);
   d0Points.length = 0;
+  d0PrePoints.length = 0;
   d0Heap.length = 0;
   d0Pending = [];
   polygonNodes.length = 0;
@@ -544,10 +553,13 @@ function invalidateAll(): void {
   invalidatePolygon();
   applyPPoints([]);  // P depends on e and maxPeriods
   d0Points.length = 0;
+  d0PrePoints.length = 0;
   d0Heap.length = 0;
   d0Pending = [];
   canvas.setBoundaryD0(null);
   zoom.setBoundaryD0(null);
+  canvas.setBoundaryPre(null);
+  zoom.setBoundaryPre(null);
 }
 
 function stopAll(): void {
@@ -1157,8 +1169,11 @@ function runBoundaries(): void {
   d0Points.length = 0;
   d0Heap.length = 0;
   d0Pending = [];
+  d0PrePoints.length = 0;
   canvas.setBoundaryD0(null);
   zoom.setBoundaryD0(null);
+  canvas.setBoundaryPre(null);   // stale once ∂D₀ is recomputed
+  zoom.setBoundaryPre(null);
   const tau0s = Array.from({ length: D0_INITIAL_K }, (_, i) => i / D0_INITIAL_K);
   ensureWorker().postMessage({
     type: 'findEscape',
@@ -1302,6 +1317,66 @@ function boundariesDone(reason: 'threshold' | 'cap' | 'stopped'): void {
   $('status').textContent = `∂D₀ done.  N=${d0Points.length}${tag}`;
 }
 
+// ---------- φ⁻¹(∂D₀): first preimage of the escape curve ----------
+//
+// The escape curve ∂D₀ = {v = v_esc(τ)} is one (graph) branch of the
+// stable manifold of infinity; its reflection ∂D₁ = ρ(∂D₀) is the
+// unstable branch, and as single-valued graphs they meet only at the two
+// reversibility-fixed phases τ = 0, ½. The extra homoclinic corners of
+// Moser's lens live on the next fold of the manifold: φ⁻¹(∂D₀). By Moser's
+// Lemma 2 (φ⁻¹ = ρ φ ρ) we get it with one forward shoot per ∂D₀ sample —
+// reflect (τ, v_esc) → (-τ, v_esc), shoot forward through φ, reflect the
+// crossing back. Points whose reflected state escapes forward (no φ image)
+// are dropped as NaN, breaking the polyline there.
+function runPreimage(): void {
+  if (phase !== 'idle') return;
+  if (d0Points.length < 2) {
+    $('status').textContent = 'compute D₀/D₁ first, then Preimage D₀';
+    return;
+  }
+  d0PrePoints.length = 0;
+  canvas.setBoundaryPre(null);
+  zoom.setBoundaryPre(null);
+  const tau0s: number[] = [];
+  const v0s: number[] = [];
+  for (const p of d0Points) {
+    tau0s.push(wrap1(-p.tau));   // ρ: reflect the escape sample
+    v0s.push(p.vEsc);
+  }
+  ensureWorker().postMessage({
+    type: 'shoot',
+    req: { e: cfg.e, maxPeriods: cfg.maxPeriods, tau0s, v0s },
+  } as HorseshoeMainToWorker);
+  phase = 'preimage';
+  $('status').textContent =
+    `computing φ⁻¹(∂D₀)… ${tau0s.length} shots (refine D₀/D₁ first for a sharper fold)`;
+}
+
+function consumePreimage(
+  tauStars: Float32Array, vStars: Float32Array, escapes: Uint8Array,
+): void {
+  d0PrePoints.length = 0;
+  let kept = 0;
+  for (let i = 0; i < d0Points.length; i++) {
+    if (escapes[i] === 1 || !isFinite(tauStars[i]) || !isFinite(vStars[i])) {
+      // No φ-preimage on the section: break the polyline here.
+      d0PrePoints.push({ tau: NaN, v: NaN });
+      continue;
+    }
+    // ρ again: reflect the forward crossing back.
+    d0PrePoints.push({ tau: wrap1(-tauStars[i]), v: vStars[i] });
+    kept++;
+  }
+  canvas.setBoundaryPre(d0PrePoints.slice());
+  zoom.setBoundaryPre(d0PrePoints.slice());
+  phase = 'idle';
+  killWorker();
+  const dropped = d0Points.length - kept;
+  $('status').textContent =
+    `φ⁻¹(∂D₀) done.  N=${kept}${dropped ? `, ${dropped} escaped` : ''}` +
+    ` — dotted; crossings with the solid pair are the lens corners`;
+}
+
 function onWorkerMsg(ev: MessageEvent<HorseshoeWorkerToMain>): void {
   const m = ev.data;
   // Shape jobs (forward/backward map, refinement) ride on plain shoot
@@ -1365,6 +1440,8 @@ function onWorkerMsg(ev: MessageEvent<HorseshoeWorkerToMain>): void {
         consumeVkEdgeResults(tauStars, vStars, escapes);
       } else if (phase === 'vk-refining') {
         consumeVkRefineResults(tauStars, vStars, escapes);
+      } else if (phase === 'preimage') {
+        consumePreimage(tauStars, vStars, escapes);
       }
       break;
     }
@@ -1439,7 +1516,7 @@ initShapesUI();
 // image. Shape list is rendered into #shape-list and lives in shapeStore.
 // ============================================================================
 
-import { shapeStore, type Shape, type ShapeId, serializeShapes, deserializeShapes, resamplePolyline, resamplePolylineWithEdgeIdx, SHAPE_REFINE_PX } from './shapes';
+import { shapeStore, type Shape, type ShapeId, serializeShapes, deserializeShapes, resamplePolyline, resamplePolylineWithEdgeIdx, SHAPE_REFINE_PX, rotatedPalette, nearestPaletteIndex } from './shapes';
 
 // Global setting for shape map operations: source curve is resampled to
 // this many points (arc-length spaced in (τ, v)) before each map. Higher
@@ -1549,23 +1626,19 @@ function consumeShapeMap(tauStars: Float32Array, vStars: Float32Array, escapes: 
   $('status').textContent = `mapped '${src.name}' ${via} (${samples.length} samples)`;
 }
 
-// Refinement: walk the forward image, bisect source edges whose image
-// edge exceeds the threshold (visual px). One round per worker call.
-function startShapeRefine(shape: Shape): void {
-  if (phase !== 'idle') return;
-  // Find the matching forward-image child of this shape (most recently
-  // added, via='forward', iterates=1). If none, can't refine — caller
-  // should map first.
-  const img = findForwardImage(shape.id);
-  if (!img) {
-    $('status').textContent = `no forward image of '${shape.name}' — click → first`;
-    return;
-  }
+// Refinement: walk an image, bisect source edges whose image edge
+// exceeds the threshold (visual px). One round per worker call. A click
+// refines EVERY direct image of the source (forward and backward), one
+// round each, processed sequentially because the worker handles one
+// shoot batch at a time.
+let refineQueue: ShapeId[] = [];
+
+// Refine one image by a single bisection round. Returns true if a worker
+// job was posted (caller must await its result), false if the image has
+// nothing left above the threshold (or lacks its source-sample track).
+function refineImageOneRound(img: Shape): boolean {
   const srcSamples = img.sourceVertices;
-  if (!srcSamples || srcSamples.length !== img.vertices.length) {
-    $('status').textContent = `'${img.name}' is missing the source-sample track; remap and retry`;
-    return;
-  }
+  if (!srcSamples || srcSamples.length !== img.vertices.length) return false;
   // Walk image edges, find those above the threshold in SCREEN PIXELS.
   // For each long edge, bisect the matching source-sample edge — its
   // midpoint shot through φ gives the new image vertex.
@@ -1591,10 +1664,7 @@ function startShapeRefine(shape: Shape): void {
     const midV = 0.5 * (sa.v + sb.v);
     candidates.push({ sourceEdge: i, sMid: { tau: midTau, v: midV } });
   }
-  if (candidates.length === 0) {
-    $('status').textContent = `'${shape.name}' image fully refined`;
-    return;
-  }
+  if (candidates.length === 0) return false;
   ensureWorker();
   const tau0s = candidates.map((c) => via === 'forward' ? c.sMid.tau : rho(c.sMid.tau));
   const v0s = candidates.map((c) => c.sMid.v);
@@ -1604,7 +1674,29 @@ function startShapeRefine(shape: Shape): void {
     req: { e: cfg.e, maxPeriods: cfg.maxPeriods, tau0s, v0s },
   });
   $('status').textContent =
-    `refining '${img.name}': ${candidates.length} mid-edge shots`;
+    `refining '${img.name}' (${via}): ${candidates.length} mid-edge shots`;
+  return true;
+}
+
+// Pull images off the queue until one posts a job (then await its result)
+// or the queue empties.
+function processRefineQueue(): void {
+  while (refineQueue.length > 0) {
+    const img = shapeStore.get(refineQueue.shift()!);
+    if (img && refineImageOneRound(img)) return;
+  }
+  $('status').textContent = 'refine: all images up to date';
+}
+
+function startShapeRefine(shape: Shape): void {
+  if (phase !== 'idle' || shapeJob) return;
+  const imgs = findImages(shape.id);
+  if (imgs.length === 0) {
+    $('status').textContent = `no image of '${shape.name}' — map it (→ or ←) first`;
+    return;
+  }
+  refineQueue = imgs.map((s) => s.id);
+  processRefineQueue();
 }
 
 function consumeShapeRefine(tauStars: Float32Array, vStars: Float32Array, escapes: Uint8Array): void {
@@ -1643,17 +1735,15 @@ function consumeShapeRefine(tauStars: Float32Array, vStars: Float32Array, escape
   shapeStore.replaceVertices(img.id, imgV);
   shapeJob = null;
   $('status').textContent = `refined '${img.name}': +${added} samples (now ${imgV.length})`;
+  // Continue with the next queued image (e.g. the backward map).
+  processRefineQueue();
 }
 
-function findForwardImage(parentId: ShapeId): Shape | null {
-  // Latest shape that descended from parentId via one forward iterate.
-  for (let i = shapeStore.list().length - 1; i >= 0; i--) {
-    const s = shapeStore.list()[i];
-    if (s.parent?.id === parentId && s.parent?.via === 'forward' && s.parent?.iterates === 1) {
-      return s;
-    }
-  }
-  return null;
+function findImages(parentId: ShapeId): Shape[] {
+  // All direct (single-iterate) images of parentId — forward AND backward
+  // — so refining a source propagates to every map it produced.
+  return shapeStore.list().filter(
+    (s) => s.parent?.id === parentId && s.parent?.iterates === 1);
 }
 
 // Shape jobs hook the existing onWorkerMsg dispatcher directly via the
@@ -1717,6 +1807,21 @@ function initShapesUI(): void {
   renderShapeList();
 }
 
+// Re-cycle a shape's per-edge palette from `startIdx`, and propagate the
+// same start to its mapped images (which carry the same logical edges) so
+// recolouring a source flows through to its forward/backward maps.
+function recolorShape(id: ShapeId, startIdx: number): void {
+  const s = shapeStore.get(id);
+  if (!s) return;
+  const numEdges = s.edgeColors?.length
+    ?? (s.closed ? s.vertices.length : Math.max(1, s.vertices.length - 1));
+  const edgeColors = rotatedPalette(startIdx, numEdges);
+  shapeStore.update(id, { edgeColors, color: edgeColors[0] });
+  for (const child of shapeStore.list()) {
+    if (child.parent?.id === id) recolorShape(child.id, startIdx);
+  }
+}
+
 function renderShapeList(): void {
   const container = $('shape-list');
   container.innerHTML = '';
@@ -1726,10 +1831,11 @@ function renderShapeList(): void {
 
     const sw = document.createElement('input');
     sw.type = 'color';
-    sw.value = sh.color.startsWith('#') ? sh.color : '#888888';
+    const startColor = sh.edgeColors?.[0] ?? sh.color;
+    sw.value = startColor.startsWith('#') ? startColor : '#888888';
     sw.className = 'sw';
-    sw.title = 'Click to recolour';
-    sw.addEventListener('input', () => shapeStore.update(sh.id, { color: sw.value }));
+    sw.title = 'Starting colour — segments cycle the palette from here';
+    sw.addEventListener('input', () => recolorShape(sh.id, nearestPaletteIndex(sw.value)));
     row.appendChild(sw);
 
     const name = document.createElement('input');
@@ -1785,8 +1891,9 @@ function renderShapeList(): void {
     row.appendChild(bwd);
 
     const ref = document.createElement('button');
-    ref.className = 'act'; ref.textContent = '↻'; ref.title = 'Refine forward image (one round)';
-    ref.disabled = findForwardImage(sh.id) === null;
+    ref.className = 'act'; ref.textContent = '↻';
+    ref.title = 'Refine images, forward & backward (one round)';
+    ref.disabled = findImages(sh.id).length === 0;
     ref.addEventListener('click', () => startShapeRefine(sh));
     row.appendChild(ref);
 

@@ -28,6 +28,9 @@ export class HorseshoeZoom {
   private spiralRight: PolygonPoint[] | null = null;
   private pPoints: { tau: number; v: number; label?: string }[] = [];
   private boundaryD0: { tau: number; v: number }[] | null = null;
+  // φ⁻¹(∂D₀): first preimage of the escape curve (folded manifold arc, in
+  // source order). NaN entries break the polyline where the shoot escaped.
+  private boundaryPre: { tau: number; v: number }[] | null = null;
   private showBoundaries = true;
   private vkPolygon: PolygonPoint[] | null = null;
   private showVk = false;
@@ -88,6 +91,10 @@ export class HorseshoeZoom {
   setShowImage(on: boolean): void { this.showImage = on; this.draw(); }
   setBoundaryD0(pts: { tau: number; v: number }[] | null): void {
     this.boundaryD0 = pts;
+    this.draw();
+  }
+  setBoundaryPre(pts: { tau: number; v: number }[] | null): void {
+    this.boundaryPre = pts;
     this.draw();
   }
   setShowBoundaries(on: boolean): void { this.showBoundaries = on; this.draw(); }
@@ -367,10 +374,44 @@ export class HorseshoeZoom {
     if (this.polygon && this.polygon.length > 2) strokePolygonByEdge(this.polygon);
     if (this.vkPolygon && this.showVk && this.vkPolygon.length > 2) strokePolygonByEdge(this.vkPolygon);
 
-    // ∂D₀ (yellow) and ∂D₁ = ρ(∂D₀) (green) boundary curves.
-    if (this.showBoundaries && this.boundaryD0 && this.boundaryD0.length > 1) {
-      drawPolyline(this.boundaryD0, T.d0Line, 1.5, (t) => t, true);
-      drawPolyline(this.boundaryD0, T.d1Line, 1.5, (t) => -t, true);
+    // φ⁻¹(∂D₀) is a folded manifold arc — draw it as a dot scatter (not a
+    // polyline) so windings read as discrete sampled points. Each point is
+    // placed at every integer τ-shift that lands it in the visible window.
+    const drawDots = (
+      pts: ReadonlyArray<{ tau: number; v: number; escaped?: boolean }>,
+      color: string, tauMap: (t: number) => number,
+    ): void => {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(p.x, p.y, p.w, p.h);
+      ctx.clip();
+      ctx.fillStyle = color;
+      for (const pt of pts) {
+        if (pt.escaped || !isFinite(pt.tau) || !isFinite(pt.v)) continue;
+        const tauRaw = tauMap(pt.tau);
+        const y = this.toY(pt.v);
+        const kLow = Math.ceil(this.range.tauMin - tauRaw);
+        const kHigh = Math.floor(this.range.tauMax - tauRaw);
+        for (let k = kLow; k <= kHigh; k++) {
+          ctx.beginPath();
+          ctx.arc(this.toX(tauRaw + k), y, 2, 0, 2 * Math.PI);
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+    };
+
+    // ∂D₀ (yellow) and ∂D₁ = ρ(∂D₀) (green) boundary curves. The dotted
+    // pair is the next manifold fold φ⁻¹(∂D₀) and its reflection φ(∂D₁).
+    if (this.showBoundaries) {
+      if (this.boundaryD0 && this.boundaryD0.length > 1) {
+        drawPolyline(this.boundaryD0, T.d0Line, 1.5, (t) => t, true);
+        drawPolyline(this.boundaryD0, T.d1Line, 1.5, (t) => -t, true);
+      }
+      if (this.boundaryPre && this.boundaryPre.length > 1) {
+        drawDots(this.boundaryPre, T.d0Line, (t) => t);
+        drawDots(this.boundaryPre, T.d1Line, (t) => -t);
+      }
     }
 
     // User-drawn shapes: stroke each chord in the colour of the source

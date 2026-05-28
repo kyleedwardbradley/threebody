@@ -48,6 +48,38 @@ const PALETTE = [
   '#ff5a5a', // red
 ];
 
+// The shared palette, exposed so the UI can offer a "starting colour".
+export const SHAPE_PALETTE: readonly string[] = PALETTE;
+
+// Per-edge colours: cycle through PALETTE starting at `startIdx`, so a
+// shape's segments are visually distinct and the whole cycle can be
+// rotated by choosing a different start colour.
+export function rotatedPalette(startIdx: number, numEdges: number): string[] {
+  const L = PALETTE.length;
+  const s = ((startIdx % L) + L) % L;
+  return Array.from({ length: Math.max(1, numEdges) },
+    (_, e) => PALETTE[(s + e) % L]);
+}
+
+// Snap an arbitrary #rrggbb to the nearest PALETTE index (Euclidean in
+// RGB). Used so the row colour picker selects a palette start colour.
+export function nearestPaletteIndex(hex: string): number {
+  const parse = (h: string): [number, number, number] => {
+    const m = /^#?([0-9a-f]{6})$/i.exec(h.trim());
+    if (!m) return [128, 128, 128];
+    const n = parseInt(m[1], 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  };
+  const [r, g, b] = parse(hex);
+  let best = 0, bestD = Infinity;
+  for (let i = 0; i < PALETTE.length; i++) {
+    const [pr, pg, pb] = parse(PALETTE[i]);
+    const d = (pr - r) ** 2 + (pg - g) ** 2 + (pb - b) ** 2;
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
+
 class ShapeStore {
   private shapes: Shape[] = [];
   private nextNum = 1;
@@ -60,7 +92,11 @@ class ShapeStore {
   }
   add(init: Partial<Shape> & Pick<Shape, 'vertices' | 'closed'>): Shape {
     const id = `sh_${Date.now().toString(36)}_${this.nextNum++}`;
-    const color = init.color ?? PALETTE[this.palIdx++ % PALETTE.length];
+    // Each fresh shape starts its edge-colour cycle one palette step on
+    // from the last, so successive shapes are visually distinguishable
+    // instead of every one starting on orange.
+    const startIdx = this.palIdx++ % PALETTE.length;
+    const color = init.color ?? PALETTE[startIdx];
     const name  = init.name  ?? `Shape ${this.shapes.length + 1}`;
     const N = init.vertices.length;
     // Number of source edges = N for closed polygons, N-1 for open
@@ -69,7 +105,7 @@ class ShapeStore {
     // open polyline that chord doesn't exist, so we clamp to last edge.
     const numEdges = init.closed ? N : Math.max(1, N - 1);
     const edgeColors = init.edgeColors
-      ?? Array.from({ length: numEdges }, (_, i) => PALETTE[i % PALETTE.length]);
+      ?? rotatedPalette(startIdx, numEdges);
     const edgeIdx = init.edgeIdx
       ?? Array.from({ length: N }, (_, i) => Math.min(i, numEdges - 1));
     const shape: Shape = {

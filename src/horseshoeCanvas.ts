@@ -74,6 +74,10 @@ export class HorseshoeCanvas {
   // Boundary of D₀: sorted by τ, points {τ, v_esc(τ)}. ∂D₁ is rendered as
   // the reflection (τ, v) → (-τ mod 1, v) per Moser's Lemma 2.
   private boundaryD0: { tau: number; v: number }[] | null = null;
+  // φ⁻¹(∂D₀): first preimage of the escape curve, in source order along
+  // ∂D₀ (NOT sorted by τ — it is a folded manifold arc). Breaks marked by
+  // NaN entries where the reflected shoot escaped forward.
+  private boundaryPre: { tau: number; v: number }[] | null = null;
   private showBoundaries = true;
   // V_k = φ⁻¹(R) ∩ R. Stored as its own polygon (in same s-order /
   // (τ, v) format as U_k). Populated by horseshoe.ts runVk() — either by
@@ -293,6 +297,10 @@ export class HorseshoeCanvas {
   }
   setBoundaryD0(pts: { tau: number; v: number }[] | null): void {
     this.boundaryD0 = pts;
+    this.draw();
+  }
+  setBoundaryPre(pts: { tau: number; v: number }[] | null): void {
+    this.boundaryPre = pts;
     this.draw();
   }
   setShowBoundaries(on: boolean): void { this.showBoundaries = on; this.draw(); }
@@ -757,9 +765,16 @@ export class HorseshoeCanvas {
 
     // ∂D₀ (yellow) and ∂D₁ (green) boundary curves. ∂D₁ = ρ(∂D₀) where
     // ρ is the time-reversal (τ, v) → (-τ mod 1, v) (Moser's Lemma 2).
-    if (this.showBoundaries && this.boundaryD0 && this.boundaryD0.length > 1) {
-      const pts = this.boundaryD0;
-      const drawCurve = (color: string, tauMap: (t: number) => number) => {
+    // The dashed pair is the next manifold fold: φ⁻¹(∂D₀) (dashed yellow,
+    // stable family) and its reflection φ(∂D₁) = ρ(φ⁻¹(∂D₀)) (dashed green,
+    // unstable family). Their crossings with the solid curves are the
+    // extra homoclinic corners of Moser's lens.
+    if (this.showBoundaries) {
+      const drawCurve = (
+        pts: ReadonlyArray<{ tau: number; v: number }>,
+        color: string, tauMap: (t: number) => number,
+      ) => {
+        if (pts.length < 2) return;
         ctx.strokeStyle = color;
         ctx.lineWidth = lw(1.5);
         ctx.beginPath();
@@ -777,8 +792,33 @@ export class HorseshoeCanvas {
         }
         ctx.stroke();
       };
-      drawCurve(T.d0Line, (t) => t);            // ∂D₀
-      drawCurve(T.d1Line, (t) => -t);           // ∂D₁ = reflection
+      // φ⁻¹(∂D₀) is a folded manifold arc — draw it as a dot scatter (not
+      // a polyline) so the winding near the escape threshold reads as
+      // discrete sampled points rather than spurious connecting chords.
+      const drawDots = (
+        pts: ReadonlyArray<{ tau: number; v: number }>,
+        color: string, tauMap: (t: number) => number,
+      ) => {
+        ctx.fillStyle = color;
+        const rad0 = lw(1.6);
+        for (const p of pts) {
+          if (!isFinite(p.v) || !vIn(p.v)) continue;
+          const rad = radiusOf(p.v);
+          if (rad < 0 || rad > R) continue;
+          const a = angleOf(unwrap(tauMap(p.tau)));
+          ctx.beginPath();
+          ctx.arc(cx + rad * Math.cos(a), cy + rad * Math.sin(a), rad0, 0, 2 * Math.PI);
+          ctx.fill();
+        }
+      };
+      if (this.boundaryD0 && this.boundaryD0.length > 1) {
+        drawCurve(this.boundaryD0, T.d0Line, (t) => t);   // ∂D₀
+        drawCurve(this.boundaryD0, T.d1Line, (t) => -t);  // ∂D₁ = ρ(∂D₀)
+      }
+      if (this.boundaryPre && this.boundaryPre.length > 1) {
+        drawDots(this.boundaryPre, T.d0Line, (t) => t);   // φ⁻¹(∂D₀)
+        drawDots(this.boundaryPre, T.d1Line, (t) => -t);  // φ(∂D₁) = ρ(φ⁻¹(∂D₀))
+      }
     }
 
     // User-drawn shapes overlay. Each shape strokes its vertices as a
