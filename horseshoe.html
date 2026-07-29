@@ -59,48 +59,8 @@
           <button id="toggle-boundaries">Hide boundaries</button>
         </div>
 
-        <h2 class="section">Sector</h2>
-
-        <div class="control">
-          <label><span>τc (central phase)</span>
-            <input type="text" id="tauc-num" class="num" min="0" max="1" step="0.001" value="0.000" />
-          </label>
-          <input type="range" id="tauc" min="0" max="1" step="0.001" value="0.000" />
-        </div>
-        <div class="control">
-          <label><span>τd (half-width)</span>
-            <input type="text" id="taud-num" class="num" min="0" max="0.5" step="0.001" value="0.011" />
-          </label>
-          <input type="range" id="taud" min="0" max="0.5" step="0.001" value="0.011" />
-        </div>
-        <div class="control">
-          <label><span>vs</span>
-            <input type="text" id="vs-num" class="num" step="0.001" value="0.300" />
-          </label>
-          <input type="range" id="vs" min="0" max="10" step="0.001" value="0.300" />
-        </div>
-        <div class="control">
-          <label><span>ve</span>
-            <input type="text" id="ve-num" class="num" step="0.001" value="1.848" />
-          </label>
-          <input type="range" id="ve" min="0" max="10" step="0.001" value="1.848" />
-        </div>
-        <div class="control">
-          <label><span>Edge points (K)</span>
-            <input type="text" id="k-num" class="num" min="10" max="5000" step="1" value="3800" />
-          </label>
-          <input type="range" id="k" min="10" max="5000" step="1" value="3800" />
-        </div>
-
         <div class="buttons">
-          <button id="run-sector">Compute sector image</button>
-          <button id="refine-sector">Refine</button>
           <button id="reset">Reset</button>
-        </div>
-        <div class="buttons">
-          <button id="run-vk">Compute V_k</button>
-          <button id="refine-vk">Refine V_k</button>
-          <button id="toggle-vk">Show V_k</button>
         </div>
 
         <h2 class="section">Shapes</h2>
@@ -125,24 +85,35 @@
           double-click / Esc to commit as an open polyline.
         </p>
 
+        <h2 class="section">Coordinate picker</h2>
+        <div class="buttons">
+          <button id="pick-toggle" title="Click a point on the polar disc to read its (τ₀, v₀)">🎯 Pick (τ₀, v₀)</button>
+        </div>
+        <div id="pick-readout" class="pick-readout">no point picked</div>
+        <div class="buttons">
+          <button id="pick-open" disabled title="Open the Single Orbit panel seeded with the picked (τ₀, v₀) and current eccentricity">→ Open in Single Orbit</button>
+        </div>
+        <p class="note">
+          Pick mode: click the disc to read τ₀ (angle) and v₀ (radius) at
+          that point. "Open in Single Orbit" launches that scenario so you
+          can watch its crossing behaviour over a few cycles.
+        </p>
+
         <div id="status">ready</div>
 
         <p class="legend">
           Disc: angle = τ (0 at top, clockwise), radius = v.<br />
           Grid (domain): each cell at (τ₀, v₀); colour = τ*.<br />
           Image (codomain): each non-escape cell plotted at
-          (τ*, |v*|); colour = τ₀.<br />
-          <span class="sw blue"></span> sector in domain ([τs,τe]×[vs,ve])<br />
-          <span class="sw red"></span> sector's image P(sector)
+          (τ*, |v*|); colour = τ₀.
         </p>
         <p class="note">
-          Escape cells are transparent. Where the red image polygon overlaps
-          the blue sector you have a Smale-horseshoe candidate. Toggle the
-          grid and image overlays with the buttons above.
+          Escape cells are transparent. Draw shapes with the pen, then map
+          them forward/backward through φ to study crossing behaviour.
         </p>
       </aside>
 
-      <main id="main" class="hs-dual">
+      <main id="main" class="hs-single">
         <div class="panel">
           <div class="hs-toolbar">
             <button id="zoom-tool" title="Toggle zoom tool: drag a box on the canvas to zoom in">Zoom</button>
@@ -151,9 +122,6 @@
             <button id="zoom-fwd"  title="Next view">▶</button>
           </div>
           <canvas id="horseshoe-canvas"></canvas>
-        </div>
-        <div class="panel">
-          <canvas id="horseshoe-zoom"></canvas>
         </div>
       </main>
     </div>

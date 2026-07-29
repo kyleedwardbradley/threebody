@@ -15,6 +15,7 @@ import {
   type SimParamsMsg,
   type Snapshot,
 } from './types';
+import { loadState, debouncedSave, wireFlushOnHide } from './persist';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
@@ -172,23 +173,23 @@ function restart(): void {
 // eccentricity
 bindNumeric('e', 'e-num',
   { toNum: (v) => v.toFixed(3), clamp: (v) => Math.max(0, Math.min(0.999, v)) },
-  (v) => { params.e = v; updateTabLinks(); restart(); });
+  (v) => { params.e = v; updateTabLinks(); restart(); saveMain(); });
 
 // v0 (allow |v| > slider range via number input)
 bindNumeric('v0', 'v0-num',
   { toNum: (v) => v.toFixed(3), clamp: (v) => v },
-  (v) => { params.v0 = v; restart(); });
+  (v) => { params.v0 = v; restart(); saveMain(); });
 
 // tau0
 bindNumeric('tau0', 'tau0-num',
   { toNum: (v) => v.toFixed(3), clamp: (v) => ((v % 1) + 1) % 1 },
-  (v) => { params.tau0 = v; updateTabLinks(); restart(); });
+  (v) => { params.tau0 = v; updateTabLinks(); restart(); saveMain(); });
 
 // max crossings
 bindNumeric('max', 'max-num',
   { toNum: (v) => Math.round(v).toString(),
     clamp: (v) => Math.max(1, Math.round(v)) },
-  (v) => { params.maxCrossings = v; restart(); });
+  (v) => { params.maxCrossings = v; restart(); saveMain(); });
 
 // Speed needs special handling (slider is log-mapped indices; num is text with "max").
 {
@@ -202,6 +203,7 @@ bindNumeric('max', 'max-num',
     send({ type: 'setSpeed', speed });
     applyTrail();
     view3d.setGhostsVisible(!isFinite(speed));
+    saveMain();
   };
   slider.addEventListener('input', () => {
     applySpeed(speedFromIndex(parseInt(slider.value, 10)), 'slider');
@@ -226,6 +228,7 @@ bindNumeric('max', 'max-num',
     if (source !== 'slider') slider.value = String(clamped);
     if (source !== 'num') num.value = String(clamped);
     applyTrail();
+    saveMain();
   };
   slider.addEventListener('input', () => applyTrailVal(parseInt(slider.value, 10), 'slider'));
   num.addEventListener('change', () => {
@@ -243,6 +246,57 @@ function applyTrail(): void {
   view3d.setTrailLength(n);
 }
 
+// ---------- State persistence (per-panel) ----------
+
+interface MainState {
+  v: 1;
+  e: number; v0: number; tau0: number; maxCrossings: number;
+  speed: string;   // formatSpeed() output (round-trips "max"/Infinity)
+  trail: number;   // 0..100
+  axes: { vmax: string; zmax: string; phaseZ: string; phaseV: string };
+}
+
+function getMainState(): MainState {
+  return {
+    v: 1,
+    e: params.e, v0: params.v0, tau0: params.tau0, maxCrossings: params.maxCrossings,
+    speed: formatSpeed(speed),
+    trail: Math.round(trailQuality * 100),
+    axes: {
+      vmax: $<HTMLInputElement>('vmax-num').value,
+      zmax: $<HTMLInputElement>('zmax-num').value,
+      phaseZ: $<HTMLInputElement>('phase-zmax-num').value,
+      phaseV: $<HTMLInputElement>('phase-vmax-num').value,
+    },
+  };
+}
+
+function saveMain(): void { debouncedSave('main', getMainState); }
+
+// Restore saved DOM control values so the existing init below reads them.
+// Runs before the axis-input blocks so their initial apply() picks them up.
+// URL query (?e/?tau0/?v0) still overrides afterwards for cross-panel handoff.
+function restoreMain(): void {
+  const s = loadState<MainState>('main');
+  if (!s || s.v !== 1) return;
+  const setv = (id: string, val: string) => { $<HTMLInputElement>(id).value = val; };
+  setv('e', String(s.e)); setv('e-num', s.e.toFixed(3));
+  setv('v0', String(s.v0)); setv('v0-num', s.v0.toFixed(3));
+  setv('tau0', String(s.tau0)); setv('tau0-num', s.tau0.toFixed(3));
+  setv('max', String(s.maxCrossings)); setv('max-num', String(s.maxCrossings));
+  const sp = parseSpeed(s.speed);
+  if (sp !== null) { setv('speed', String(indexFromSpeed(sp))); setv('speed-num', formatSpeed(sp)); }
+  setv('trail', String(s.trail)); setv('trail-num', String(s.trail));
+  if (s.axes) {
+    setv('vmax-num', s.axes.vmax);
+    setv('zmax-num', s.axes.zmax);
+    setv('phase-zmax-num', s.axes.phaseZ);
+    setv('phase-vmax-num', s.axes.phaseV);
+  }
+}
+restoreMain();
+wireFlushOnHide();
+
 // Buttons
 // Polar plot |v| max
 {
@@ -252,6 +306,7 @@ function applyTrail(): void {
     if (!isFinite(n) || n <= 0) { num.value = polar.getVMax().toString(); return; }
     polar.setVMax(n);
     num.value = n.toString();
+    saveMain();
   };
   num.addEventListener('change', apply);
   num.addEventListener('keydown', (ev) => {
@@ -265,11 +320,12 @@ function applyTrail(): void {
   const num = $<HTMLInputElement>('zmax-num');
   const apply = () => {
     const raw = num.value.trim().toLowerCase();
-    if (raw === '' || raw === 'auto') { ztPlot.setZMax(null); num.value = 'auto'; return; }
+    if (raw === '' || raw === 'auto') { ztPlot.setZMax(null); num.value = 'auto'; saveMain(); return; }
     const n = parseFloat(raw);
-    if (!isFinite(n) || n <= 0) { num.value = 'auto'; ztPlot.setZMax(null); return; }
+    if (!isFinite(n) || n <= 0) { num.value = 'auto'; ztPlot.setZMax(null); saveMain(); return; }
     ztPlot.setZMax(n);
     num.value = n.toString();
+    saveMain();
   };
   num.addEventListener('change', apply);
   num.addEventListener('keydown', (ev) => {
@@ -283,11 +339,12 @@ function bindAxisInput(inputId: string, setter: (v: number | null) => void) {
   const num = $<HTMLInputElement>(inputId);
   const apply = () => {
     const raw = num.value.trim().toLowerCase();
-    if (raw === '' || raw === 'auto') { setter(null); num.value = 'auto'; return; }
+    if (raw === '' || raw === 'auto') { setter(null); num.value = 'auto'; saveMain(); return; }
     const n = parseFloat(raw);
-    if (!isFinite(n) || n <= 0) { num.value = 'auto'; setter(null); return; }
+    if (!isFinite(n) || n <= 0) { num.value = 'auto'; setter(null); saveMain(); return; }
     setter(n);
     num.value = n.toString();
+    saveMain();
   };
   num.addEventListener('change', apply);
   num.addEventListener('keydown', (ev) => {
@@ -352,15 +409,20 @@ params.maxCrossings = parseInt($<HTMLInputElement>('max').value, 10);
 speed = speedFromIndex(parseInt($<HTMLInputElement>('speed').value, 10));
 trailQuality = parseInt($<HTMLInputElement>('trail').value, 10) / 100;
 
-// Apply URL query overrides (?e=&tau0=) carried in from the sibling page.
+// Apply URL query overrides (?e=&tau0=&v0=) carried in from a sibling page
+// (e.g. the Horseshoe coordinate picker). These win over restored state so
+// the handoff lands exactly where the user clicked.
 {
   const p = new URLSearchParams(window.location.search);
   const eq = parseFloat(p.get('e') ?? '');
   const tq = parseFloat(p.get('tau0') ?? '');
+  const vq = parseFloat(p.get('v0') ?? '');
   if (isFinite(eq)) params.e = Math.max(0, Math.min(0.999, eq));
   if (isFinite(tq)) params.tau0 = ((tq % 1) + 1) % 1;
+  if (isFinite(vq)) params.v0 = vq;
   $<HTMLInputElement>('e').value = String(params.e);
   $<HTMLInputElement>('tau0').value = String(params.tau0);
+  $<HTMLInputElement>('v0').value = String(params.v0);
 }
 
 $<HTMLInputElement>('e-num').value = params.e.toFixed(3);

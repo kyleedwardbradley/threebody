@@ -21,19 +21,11 @@ export interface Palette {
   colorUp: string;
   colorDn: string;
   colorEscape: string;
-  // Sector image overlays (horseshoe)
-  polygonFill: string;
-  vkFill: string;
-  sectorFill: string;
-  sectorStroke: string;
+  // Horseshoe overlays
   d0Line: string;
   d1Line: string;
   pMarkerFill: string;
   pMarkerStroke: string;
-  edge0: string;
-  edge1: string;
-  edge2: string;
-  edge3: string;
 }
 
 const STORAGE_KEY = 'threebody-theme';
@@ -61,18 +53,10 @@ export function getPalette(): Palette {
     colorUp:         readVar(cs, '--color-up'),
     colorDn:         readVar(cs, '--color-dn'),
     colorEscape:     readVar(cs, '--color-escape'),
-    polygonFill:     readVar(cs, '--polygon-fill'),
-    vkFill:          readVar(cs, '--vk-fill'),
-    sectorFill:      readVar(cs, '--sector-fill'),
-    sectorStroke:    readVar(cs, '--sector-stroke'),
     d0Line:          readVar(cs, '--d0-line'),
     d1Line:          readVar(cs, '--d1-line'),
     pMarkerFill:     readVar(cs, '--p-marker-fill'),
     pMarkerStroke:   readVar(cs, '--p-marker-stroke'),
-    edge0:           readVar(cs, '--edge-0'),
-    edge1:           readVar(cs, '--edge-1'),
-    edge2:           readVar(cs, '--edge-2'),
-    edge3:           readVar(cs, '--edge-3'),
   };
 }
 

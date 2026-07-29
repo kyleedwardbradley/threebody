@@ -1,32 +1,22 @@
 // Polar canvas for the Horseshoe page.
 //  - Shows a τ₀-by-v₀ grid heatmap of τ* (first-return phase), with
 //    escape cells rendered transparent.
-//  - Overlays a translucent blue "sector" (the chosen rectangle in
-//    domain (τ, v) space).
-//  - Overlays a translucent red "image polygon" (the closed curve in
-//    codomain (τ*, |v*|) space traced by integrating around the sector
-//    boundary).
+//  - Overlays the ∂D₀/∂D₁ escape boundaries, P fixed-point markers, and
+//    user-drawn shapes (and their φ images).
 //
 // Heatmap pixels are rasterised to an offscreen canvas as grid rows
 // arrive; the main draw composits offscreen + overlays each redraw.
 
 import { getPalette, onThemeChange } from './theme';
+import { segmentColorBins } from './shapes';
 
-export interface SectorRect {
-  tauS: number; tauE: number; // τ₀ bounds (may wrap mod 1)
-  vS: number; vE: number;     // v₀ bounds (vS < vE)
-}
-
-export interface PolygonPoint {
-  tau: number;        // τ* (cyclic mod 1)
-  v: number;          // |v*|
-  escaped: boolean;
-  // Boundary parameter s ∈ [0, 4) of the source vertex. Used by the
-  // per-edge-coloured renderers to bin the chord into one of four
-  // source edges (left / top / right / bottom). Optional for
-  // backwards compatibility with user-drawn shapes which don't have an
-  // s parameterisation; renderers fall back to a single colour.
-  s?: number;
+// Serialisable snapshot of a computed grid (for caching across navigation).
+export interface GridSnapshot {
+  n: number;
+  tauMin: number; tauMax: number;
+  vMin: number; vMax: number;
+  tau: number[];   // n*n row-major τ* values (NaN = escape)
+  v: number[];     // n*n row-major |v*| values
 }
 
 // Viewport rectangle in NATURAL canvas pixel coordinates (the rectangle of
@@ -63,12 +53,6 @@ export class HorseshoeCanvas {
   private tauStars: Float32Array | null = null;
   private vStars: Float32Array | null = null;
 
-  private sector: SectorRect | null = null;
-  private polygon: PolygonPoint[] | null = null;
-  // Matched pair of spirals (image of τ=tauS and τ=tauE edges of R),
-  // sampled at the same K v values so adjacent entries form a quad.
-  private spiralLeft: PolygonPoint[] | null = null;
-  private spiralRight: PolygonPoint[] | null = null;
   // P points: where ∂D₀ ∩ ∂D₁ on a symmetry line (Moser's P).
   private pPoints: { tau: number; v: number; label?: string }[] = [];
   // Boundary of D₀: sorted by τ, points {τ, v_esc(τ)}. ∂D₁ is rendered as
@@ -79,13 +63,6 @@ export class HorseshoeCanvas {
   // NaN entries where the reflected shoot escaped forward.
   private boundaryPre: { tau: number; v: number }[] | null = null;
   private showBoundaries = true;
-  // V_k = φ⁻¹(R) ∩ R. Stored as its own polygon (in same s-order /
-  // (τ, v) format as U_k). Populated by horseshoe.ts runVk() — either by
-  // mirroring the U_k polygon (when R is symmetric about τc=0 or 0.5)
-  // or by shooting the reflected sector through φ and reflecting back.
-  // Toggled with showVk; nothing is drawn unless vkPolygon is non-null.
-  private vkPolygon: PolygonPoint[] | null = null;
-  private showVk = false;
   // User-drawn shapes overlay.
   private shapes: ReadonlyArray<import('./shapes').Shape> = [];
   // Pen-mode drawing state: when active, clicks add vertices to a draft
@@ -95,6 +72,12 @@ export class HorseshoeCanvas {
   private drawDraft: { tau: number; v: number }[] = [];
   private drawCursor: { tau: number; v: number } | null = null;
   onDrawCommit: ((vertices: { tau: number; v: number }[], closed: boolean) => void) | null = null;
+  // Coordinate-picker state: when active, a click reports the (τ₀, v₀) at
+  // the cursor via onPick instead of drawing/zooming. The last picked point
+  // is drawn as a crosshair marker.
+  private pickMode = false;
+  private pickedPoint: { tau: number; v: number } | null = null;
+  onPick: ((p: { tau: number; v: number }) => void) | null = null;
   private showGrid = true;
   private showImage = false;
 
@@ -153,6 +136,14 @@ export class HorseshoeCanvas {
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   }
   private onMouseDown(e: MouseEvent): void {
+    if (this.pickMode) {
+      const pos = this.mousePos(e);
+      const p = this.screenToTauV(pos.x, pos.y);
+      this.pickedPoint = p;
+      if (this.onPick) this.onPick(p);
+      this.draw();
+      return;
+    }
     if (this.penMode) { this.penClick(this.mousePos(e)); return; }
     if (!this.zoomToolActive) return;
     this.dragStart = this.mousePos(e);
@@ -282,15 +273,33 @@ export class HorseshoeCanvas {
     this.draw();
   }
 
-  // ----- overlays -----
+  // Capture the full grid (for caching across page navigation). Returns
+  // null when no grid is present. Float32Arrays are flattened to plain
+  // number[] so the result is JSON-serialisable.
+  getGridSnapshot(): GridSnapshot | null {
+    if (!this.tauStars || !this.vStars || this.n <= 0) return null;
+    return {
+      n: this.n,
+      tauMin: this.scanTauMin, tauMax: this.scanTauMax,
+      vMin: this.scanVMin, vMax: this.scanVMax,
+      tau: Array.from(this.tauStars),
+      v: Array.from(this.vStars),
+    };
+  }
 
-  setSector(s: SectorRect | null): void { this.sector = s; this.draw(); }
-  setPolygon(pts: PolygonPoint[] | null): void { this.polygon = pts; this.draw(); }
-  setSpiralPair(left: PolygonPoint[] | null, right: PolygonPoint[] | null): void {
-    this.spiralLeft = left;
-    this.spiralRight = right;
+  // Restore a grid captured by getGridSnapshot in one shot (single redraw).
+  restoreGrid(s: GridSnapshot): void {
+    this.n = s.n;
+    this.scanTauMin = s.tauMin; this.scanTauMax = s.tauMax;
+    this.scanVMin = s.vMin; this.scanVMax = s.vMax;
+    this.tauStars = Float32Array.from(s.tau);
+    this.vStars = Float32Array.from(s.v);
+    this.offValid = false;
     this.draw();
   }
+
+  // ----- overlays -----
+
   setPPoints(pts: { tau: number; v: number; label?: string }[]): void {
     this.pPoints = pts;
     this.draw();
@@ -305,9 +314,6 @@ export class HorseshoeCanvas {
   }
   setShowBoundaries(on: boolean): void { this.showBoundaries = on; this.draw(); }
   getShowBoundaries(): boolean { return this.showBoundaries; }
-  setShowVk(on: boolean): void { this.showVk = on; this.draw(); }
-  setVkPolygon(pts: PolygonPoint[] | null): void { this.vkPolygon = pts; this.draw(); }
-  hasVkPolygon(): boolean { return this.vkPolygon !== null; }
 
   // User-shape overlay + pen mode.
   setShapes(shapes: ReadonlyArray<import('./shapes').Shape>): void {
@@ -319,6 +325,18 @@ export class HorseshoeCanvas {
     if (!on) { this.drawDraft.length = 0; this.drawCursor = null; this.draw(); }
   }
   getPenMode(): boolean { return this.penMode; }
+  setPickMode(on: boolean): void {
+    this.pickMode = on;
+    this.canvas.style.cursor = on ? 'crosshair' : '';
+    this.draw();
+  }
+  getPickMode(): boolean { return this.pickMode; }
+  // Set/clear the picked-point marker (also used to restore it on reload).
+  setPickedPoint(p: { tau: number; v: number } | null): void {
+    this.pickedPoint = p;
+    this.draw();
+  }
+  getPickedPoint(): { tau: number; v: number } | null { return this.pickedPoint; }
   // Convert a screen (x, y) inside the polar canvas into the (τ, v)
   // coordinates the disc represents at this zoom level. The inverse of
   // angleOf/radiusOf in drawPolar, accounting for the viewport zoom
@@ -362,7 +380,6 @@ export class HorseshoeCanvas {
     }
     return { x, y };
   }
-  getShowVk(): boolean { return this.showVk; }
   setVMax(v: number): void {
     if (!isFinite(v) || v <= 0) return;
     this.vMax = v;
@@ -704,65 +721,6 @@ export class HorseshoeCanvas {
       ctx.fillText(months[m], cx + (R + 14) * Math.cos(a), cy + (R + 14) * Math.sin(a));
     }
 
-    // Sector overlay (annular wedge in natural polar coords). Filled
-    // with sectorFill; each of the four edges stroked in its own colour
-    // (matching the forward / backward image arcs below).
-    if (this.sector) {
-      const s = this.sector;
-      const rIn = Math.max(0, Math.min(R, radiusOf(s.vS)));
-      const rOut = Math.max(0, Math.min(R, radiusOf(s.vE)));
-      const aS = angleOf(s.tauS);
-      const aE = angleOf(s.tauE);
-      const fromA = aS;
-      const toA = aE > aS ? aE : aE + 2 * Math.PI;
-      // Fill the region first.
-      ctx.fillStyle = T.sectorFill;
-      ctx.beginPath();
-      ctx.arc(cx, cy, rOut, fromA, toA, false);
-      ctx.arc(cx, cy, rIn, toA, fromA, true);
-      ctx.closePath();
-      ctx.fill();
-      // Stroke each edge in its colour.
-      ctx.lineWidth = lw(1.8);
-      const edgeColors = [T.edge0, T.edge1, T.edge2, T.edge3];
-      // Edge 0: radial at aS from rIn to rOut.
-      ctx.strokeStyle = edgeColors[0];
-      ctx.beginPath();
-      ctx.moveTo(cx + rIn * Math.cos(fromA), cy + rIn * Math.sin(fromA));
-      ctx.lineTo(cx + rOut * Math.cos(fromA), cy + rOut * Math.sin(fromA));
-      ctx.stroke();
-      // Edge 1: top arc at rOut from aS to aE.
-      ctx.strokeStyle = edgeColors[1];
-      ctx.beginPath();
-      ctx.arc(cx, cy, rOut, fromA, toA, false);
-      ctx.stroke();
-      // Edge 2: radial at aE from rOut to rIn.
-      ctx.strokeStyle = edgeColors[2];
-      ctx.beginPath();
-      ctx.moveTo(cx + rOut * Math.cos(toA), cy + rOut * Math.sin(toA));
-      ctx.lineTo(cx + rIn * Math.cos(toA), cy + rIn * Math.sin(toA));
-      ctx.stroke();
-      // Edge 3: bottom arc at rIn back from aE to aS.
-      ctx.strokeStyle = edgeColors[3];
-      ctx.beginPath();
-      ctx.arc(cx, cy, rIn, toA, fromA, true);
-      ctx.stroke();
-    }
-
-    // U_k = φ(R) ∩ R: forward image of the sector. Drawn as four
-    // colour-coded sub-paths, one per source edge (left / top / right /
-    // bottom in s-order), so the user can see how each rectangle edge
-    // gets warped. Each chord takes the colour of its starting node's
-    // edge bin (floor(s) mod 4).
-    if (this.polygon && this.polygon.length > 2) {
-      drawPolygonByEdge(ctx, this.polygon, T, lw, vIn, radiusOf, angleOf, unwrap, cx, cy, R);
-    }
-
-    // V_k = φ⁻¹(R) ∩ R. Same per-edge colouring scheme as U_k.
-    if (this.vkPolygon && this.showVk && this.vkPolygon.length > 2) {
-      drawPolygonByEdge(ctx, this.vkPolygon, T, lw, vIn, radiusOf, angleOf, unwrap, cx, cy, R);
-    }
-
     // ∂D₀ (yellow) and ∂D₁ (green) boundary curves. ∂D₁ = ρ(∂D₀) where
     // ρ is the time-reversal (τ, v) → (-τ mod 1, v) (Moser's Lemma 2).
     // The dashed pair is the next manifold fold: φ⁻¹(∂D₀) (dashed yellow,
@@ -855,14 +813,16 @@ export class HorseshoeCanvas {
         if (Nv >= 2) {
           if (usePerEdge) {
             const nb = colors!.length;
+            // Colour changes only at sharp corners (>40° turn), not at
+            // every resampled vertex — see segmentColorBins.
+            const segBins = segmentColorBins(pts, sh.closed);
             const paths: Path2D[] = Array.from({ length: nb }, () => new Path2D());
             const segLast = sh.closed ? Nv : Nv - 1;
             for (let i = 0; i < segLast; i++) {
               const j = (i + 1) % Nv;
               const pa = pts[i], pb = pts[j];
               if (!pa.ok || !pb.ok) continue;
-              const raw = ei![i] ?? 0;
-              const bin = ((raw % nb) + nb) % nb;
+              const bin = ((segBins[i] % nb) + nb) % nb;
               paths[bin].moveTo(pa.x, pa.y);
               paths[bin].lineTo(pb.x, pb.y);
             }
@@ -884,7 +844,10 @@ export class HorseshoeCanvas {
           }
         }
         // Vertex dots — colour-matched to the edge palette where available.
-        for (let i = 0; i < Nv; i++) {
+        // Mapped/refined images (those with a φ lineage) are drawn as
+        // coloured segments only; their resampled vertices are not points
+        // the user placed, so plotting them just clutters the curve.
+        if (!sh.parent) for (let i = 0; i < Nv; i++) {
           const p = pts[i];
           if (!p.ok) continue;
           let dotColor = sh.color;
@@ -979,6 +942,32 @@ export class HorseshoeCanvas {
       }
     }
 
+    // Coordinate-picker marker: a crosshair + ring at the picked (τ₀, v₀).
+    if (this.pickedPoint && vIn(this.pickedPoint.v)) {
+      const rad = radiusOf(this.pickedPoint.v);
+      if (rad >= 0 && rad <= R + 8) {
+        const ang = angleOf(unwrap(this.pickedPoint.tau));
+        const x = cx + rad * Math.cos(ang);
+        const y = cy + rad * Math.sin(ang);
+        const arm = lw(8);
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = lw(2.5);
+        ctx.beginPath();
+        ctx.moveTo(x - arm, y); ctx.lineTo(x + arm, y);
+        ctx.moveTo(x, y - arm); ctx.lineTo(x, y + arm);
+        ctx.stroke();
+        ctx.strokeStyle = '#ff2d55';
+        ctx.lineWidth = lw(1.5);
+        ctx.beginPath();
+        ctx.moveTo(x - arm, y); ctx.lineTo(x + arm, y);
+        ctx.moveTo(x, y - arm); ctx.lineTo(x, y + arm);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x, y, lw(5), 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
     // End of transformed drawing. Title + colour bar are screen-anchored.
     ctx.restore();
 
@@ -1002,67 +991,6 @@ export class HorseshoeCanvas {
     if (this.showGrid && this.tauStars) this.drawColorBar(ctx, w, h);
   }
 
-}
-
-// Stroke a polygon (sector image) on the polar disc, colour-coded per
-// source edge. Each polygon vertex carries an `s` ∈ [0, 4); the chord
-// from vertex i to i+1 inherits floor(s_i) mod 4 as its edge bin. We
-// batch chords by bin into four Path2D instances and stroke each in
-// its colour — cheaper than one stroke per chord at typical polygon
-// sizes (10²–10⁴ vertices).
-function drawPolygonByEdge(
-  ctx: CanvasRenderingContext2D,
-  poly: PolygonPoint[],
-  T: ReturnType<typeof import('./theme').getPalette>,
-  lw: (px: number) => number,
-  vIn: (v: number) => boolean,
-  radiusOf: (v: number) => number,
-  angleOf: (tau: number) => number,
-  unwrap: (tau: number) => number,
-  cx: number, cy: number, R: number,
-): void {
-  const colors = [T.edge0, T.edge1, T.edge2, T.edge3];
-  const paths: Path2D[] = [new Path2D(), new Path2D(), new Path2D(), new Path2D()];
-  const lastPos: ({ x: number; y: number } | null)[] = [null, null, null, null];
-  const screen = (p: PolygonPoint): { x: number; y: number } | null => {
-    if (p.escaped || !isFinite(p.tau) || !isFinite(p.v)) return null;
-    if (!vIn(p.v)) return null;
-    const rad = radiusOf(p.v);
-    if (rad < 0 || rad > R) return null;
-    const a = angleOf(unwrap(p.tau));
-    return { x: cx + rad * Math.cos(a), y: cy + rad * Math.sin(a) };
-  };
-  const N = poly.length;
-  for (let i = 0; i < N; i++) {
-    const a = poly[i];
-    const b = poly[(i + 1) % N];
-    const sa = screen(a);
-    const sb = screen(b);
-    if (!sa || !sb) {
-      // Break in either endpoint: drop the chord and invalidate this
-      // bin's continuity so the next chord in that bin starts fresh.
-      for (let c = 0; c < 4; c++) lastPos[c] = null;
-      continue;
-    }
-    const s = a.s;
-    const bin = (typeof s === 'number' && isFinite(s))
-      ? Math.floor(((s % 4) + 4) % 4) : 0;
-    const safeBin = Math.max(0, Math.min(3, bin));
-    const p = paths[safeBin];
-    const last = lastPos[safeBin];
-    if (last && Math.abs(last.x - sa.x) < 0.5 && Math.abs(last.y - sa.y) < 0.5) {
-      p.lineTo(sb.x, sb.y);
-    } else {
-      p.moveTo(sa.x, sa.y);
-      p.lineTo(sb.x, sb.y);
-    }
-    lastPos[safeBin] = { x: sb.x, y: sb.y };
-  }
-  ctx.lineWidth = lw(1.5);
-  for (let c = 0; c < 4; c++) {
-    ctx.strokeStyle = colors[c];
-    ctx.stroke(paths[c]);
-  }
 }
 
 // Cyclic τ bounding-arc: find the largest gap and return the complement.

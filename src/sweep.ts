@@ -10,6 +10,7 @@ import type {
   SweepRequest,
   SweepResult,
 } from './types';
+import { loadState, debouncedSave, wireFlushOnHide } from './persist';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
@@ -292,33 +293,33 @@ function bindNumeric(
 
 const eSetter = bindNumeric('e', 'e-num',
   { toNum: (v) => v.toFixed(3), clamp: (v) => Math.max(0, Math.min(0.999, v)) },
-  (v) => { cfg.e = v; updateTabLinks(); });
+  (v) => { cfg.e = v; updateTabLinks(); saveSweep(); });
 
 const tau0Setter = bindNumeric('tau0', 'tau0-num',
   { toNum: (v) => v.toFixed(3), clamp: (v) => ((v % 1) + 1) % 1 },
-  (v) => { cfg.tau0 = v; updateTabLinks(); });
+  (v) => { cfg.tau0 = v; updateTabLinks(); saveSweep(); });
 
 const v0MinSetter = bindNumeric('v0min', 'v0min-num',
   { toNum: (v) => v.toFixed(3), clamp: (v) => Math.max(1e-4, v) },
-  (v) => { cfg.v0Min = v; applyDomainRange(cfg.v0Min, cfg.v0Max); });
+  (v) => { cfg.v0Min = v; applyDomainRange(cfg.v0Min, cfg.v0Max); saveSweep(); });
 
 const v0MaxSetter = bindNumeric('v0max', 'v0max-num',
   { toNum: (v) => v.toFixed(3), clamp: (v) => Math.max(1e-4, v) },
-  (v) => { cfg.v0Max = v; applyDomainRange(cfg.v0Min, cfg.v0Max); });
+  (v) => { cfg.v0Max = v; applyDomainRange(cfg.v0Min, cfg.v0Max); saveSweep(); });
 
 const nSetter = bindNumeric('n', 'n-num',
   { toNum: (v) => Math.round(v).toString(),
     clamp: (v) => Math.max(1, Math.min(1_000_000, Math.round(v))) },
-  (v) => { cfg.n = v; });
+  (v) => { cfg.n = v; saveSweep(); });
 
 const tmaxSetter = bindNumeric('tmax', 'tmax-num',
   { toNum: (v) => Math.round(v).toString(),
     clamp: (v) => Math.max(1, Math.min(100_000, Math.round(v))) },
-  (v) => { cfg.maxPeriods = v; });
+  (v) => { cfg.maxPeriods = v; saveSweep(); });
 
 bindNumeric('dot', 'dot-num',
   { toNum: (v) => v.toFixed(1), clamp: (v) => Math.max(0.1, Math.min(20, v)) },
-  (v) => { applyDotSize(v); });
+  (v) => { applyDotSize(v); saveSweep(); });
 
 // Segmented controls
 function bindSeg<T extends string>(
@@ -336,13 +337,14 @@ function bindSeg<T extends string>(
   return apply;
 }
 
-const setSpacing = bindSeg<'linear' | 'log'>('data-spacing', (v) => { cfg.spacing = v; });
-const setMode = bindSeg<SweepPlotMode>('data-mode', (v) => { plotMode = v; applyMode(v); });
+const setSpacing = bindSeg<'linear' | 'log'>('data-spacing', (v) => { cfg.spacing = v; saveSweep(); });
+const setMode = bindSeg<SweepPlotMode>('data-mode', (v) => { plotMode = v; applyMode(v); saveSweep(); });
 const setColor = bindSeg<SweepColorMode>('data-color', (v) => {
   plotColor = v;
   applyColor(v);
   const leg = document.getElementById('color-legend');
   if (leg) leg.textContent = v === 'time' ? 't* (blue → red)' : 'v₀ (purple → yellow)';
+  saveSweep();
 });
 
 // Buttons
@@ -457,7 +459,48 @@ function updateTabLinks(): void {
   }
 }
 
+// ---------- State persistence (per-panel) ----------
+
+interface SweepState {
+  v: 1;
+  cfg: SweepRequest;
+  plotMode: SweepPlotMode;
+  plotColor: SweepColorMode;
+  dot: string;   // dot-size slider value
+}
+
+function getSweepState(): SweepState {
+  return {
+    v: 1,
+    cfg: { ...cfg },
+    plotMode, plotColor,
+    dot: $<HTMLInputElement>('dot').value,
+  };
+}
+
+function saveSweep(): void { debouncedSave('sweep', getSweepState); }
+
+// Restore saved values into cfg / mode vars / DOM controls so the init
+// block below picks them up. URL query still overrides afterwards.
+function restoreSweep(): void {
+  const s = loadState<SweepState>('sweep');
+  if (!s || s.v !== 1) return;
+  Object.assign(cfg, s.cfg);
+  plotMode = s.plotMode;
+  plotColor = s.plotColor;
+  const setv = (id: string, val: string) => { $<HTMLInputElement>(id).value = val; };
+  setv('e', String(cfg.e)); setv('e-num', cfg.e.toFixed(3));
+  setv('tau0', String(cfg.tau0)); setv('tau0-num', cfg.tau0.toFixed(3));
+  setv('v0min', String(cfg.v0Min)); setv('v0min-num', cfg.v0Min.toFixed(3));
+  setv('v0max', String(cfg.v0Max)); setv('v0max-num', cfg.v0Max.toFixed(3));
+  setv('n', String(cfg.n)); setv('n-num', String(cfg.n));
+  setv('tmax', String(cfg.maxPeriods)); setv('tmax-num', String(cfg.maxPeriods));
+  if (s.dot) { setv('dot', s.dot); setv('dot-num', parseFloat(s.dot).toFixed(1)); }
+}
+
 // ---------- Init ----------
+
+restoreSweep();
 
 // Initial sync from default slider values.
 cfg.e = parseFloat($<HTMLInputElement>('e').value);
@@ -488,3 +531,4 @@ polarCodomain.setRange(0, Math.max(0.5, cfg.v0Max));
 readQuery();
 updateTabLinks();
 setButtonsRunning();
+wireFlushOnHide();

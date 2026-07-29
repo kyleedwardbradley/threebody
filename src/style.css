@@ -29,17 +29,6 @@
   --plot-border:         #3a3a48;
   --grid-line:           rgba(180, 200, 230, 0.10);
   --grid-line-strong:    rgba(180, 200, 230, 0.18);
-  --polygon-fill:        rgb(220, 90, 90);
-  --vk-fill:             rgba(80, 140, 255, 0.40);
-  /* Per-edge colours for sector / U_k / V_k rendering. Edges are
-     numbered by their s-range: 0=left (s∈[0,1)), 1=top (s∈[1,2)),
-     2=right (s∈[2,3)), 3=bottom (s∈[3,4)). */
-  --edge-0:              #ff8a3a;
-  --edge-1:              #3acdff;
-  --edge-2:              #5fd07a;
-  --edge-3:              #ff66c4;
-  --sector-fill:         rgba(80, 140, 255, 0.30);
-  --sector-stroke:       rgba(140, 180, 255, 0.9);
   --d0-line:             #ffd24a;
   --d1-line:             #5fd07a;
   --p-marker-fill:       #ffffff;
@@ -72,14 +61,6 @@
   --plot-border:         #b8b8c4;
   --grid-line:           rgba(20, 30, 60, 0.08);
   --grid-line-strong:    rgba(20, 30, 60, 0.18);
-  --polygon-fill:        rgb(210, 70, 70);
-  --vk-fill:             rgba(40, 90, 200, 0.32);
-  --edge-0:              #c2410c;
-  --edge-1:              #0369a1;
-  --edge-2:              #15803d;
-  --edge-3:              #be185d;
-  --sector-fill:         rgba(80, 140, 255, 0.22);
-  --sector-stroke:       rgba(40, 80, 160, 0.85);
   --d0-line:             #b58400;
   --d1-line:             #2e8a3e;
   --p-marker-fill:       #1a1a22;
@@ -207,6 +188,10 @@ html, body {
   margin-top: 14px; font-size: 11px; opacity: 0.7; font-variant-numeric: tabular-nums;
   white-space: pre-wrap;
 }
+.pick-readout {
+  margin-top: 6px; font-size: 12px; font-variant-numeric: tabular-nums;
+  opacity: 0.85; min-height: 1.2em;
+}
 .legend { margin-top: 18px; font-size: 11px; opacity: 0.75; line-height: 1.6; }
 .legend .sw {
   display: inline-block; width: 9px; height: 9px; border-radius: 50%;
@@ -311,18 +296,18 @@ html, body {
   grid-template-columns: 1fr;
   grid-template-rows: 1fr;
 }
-#main.hs-dual {
-  grid-template-columns: 1.5fr 1fr;
+#main.hs-single {
+  grid-template-columns: 1fr;
   grid-template-rows: 1fr;
 }
-#main.hs-dual .panel {
+#main.hs-single .panel {
   position: relative;
   background: var(--bg-canvas);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
-#main.hs-dual .panel canvas {
+#main.hs-single .panel canvas {
   width: 100%; height: 100%; display: block;
 }
 

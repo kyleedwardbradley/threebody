@@ -163,6 +163,63 @@ export const CLOSURE_SNAP_PX = 8;
 // Default per-shape refinement target (forward-image segment ≤ this).
 export const SHAPE_REFINE_PX = 1;
 
+// Colour-change turn threshold for segment colouring. A polygon's segment
+// colour only advances at a "sharp" corner — a vertex where the turn
+// between the two adjacent segments exceeds this angle. Nearly-collinear
+// runs (e.g. a mapped/refined edge resampled into many small chords) keep
+// a single colour; the colour switches only at genuine corners.
+export const SEGMENT_TURN_THRESHOLD_DEG = 40;
+
+// Assign a colour-run index to each segment of a polyline/polygon, given
+// the vertices already projected to screen space. `pts[i]` is the screen
+// position of vertex i; `ok=false` marks a vertex that could not be placed
+// (off-range) and breaks continuity without forcing a colour change.
+//
+// Returns one bin per segment: segment s connects pts[s] → pts[s+1]
+// (for closed shapes the last segment connects pts[N-1] → pts[0]). The
+// bin only increments at a vertex whose turn angle exceeds `thresholdDeg`.
+// Callers map a bin to a colour via palette[bin % palette.length].
+export function segmentColorBins(
+  pts: ReadonlyArray<{ x: number; y: number; ok: boolean }>,
+  closed: boolean,
+  thresholdDeg: number = SEGMENT_TURN_THRESHOLD_DEG,
+): number[] {
+  const N = pts.length;
+  const segCount = closed ? N : N - 1;
+  const bins = new Array<number>(Math.max(0, segCount)).fill(0);
+  if (segCount <= 0) return bins;
+  const thresholdRad = (thresholdDeg * Math.PI) / 180;
+  // Sharp turn at the vertex shared by segment (vi-1) and segment vi.
+  const sharpAtVertex = (vi: number): boolean => {
+    const prev = pts[(vi - 1 + N) % N];
+    const cur = pts[vi];
+    const next = pts[(vi + 1) % N];
+    if (!prev.ok || !cur.ok || !next.ok) return false;
+    const d1x = cur.x - prev.x, d1y = cur.y - prev.y;
+    const d2x = next.x - cur.x, d2y = next.y - cur.y;
+    if ((d1x === 0 && d1y === 0) || (d2x === 0 && d2y === 0)) return false;
+    const cross = d1x * d2y - d1y * d2x;
+    const dot = d1x * d2x + d1y * d2y;
+    return Math.abs(Math.atan2(cross, dot)) > thresholdRad;
+  };
+  let bin = 0;
+  for (let s = 0; s < segCount; s++) {
+    // Segment s starts at vertex s; a sharp corner there (relative to the
+    // previous segment) advances the colour. Segment 0 of an open shape
+    // has no previous segment, so it always starts run 0.
+    if (s > 0 && sharpAtVertex(s)) bin++;
+    bins[s] = bin;
+  }
+  // Closed shapes: if the seam vertex (0) is not a corner, the trailing
+  // run wraps into run 0 — relabel it so the colour is continuous across
+  // the seam.
+  if (closed && bin > 0 && !sharpAtVertex(0)) {
+    const lastBin = bins[segCount - 1];
+    for (let s = segCount - 1; s >= 0 && bins[s] === lastBin; s--) bins[s] = 0;
+  }
+  return bins;
+}
+
 // Resample a polyline (or closed polygon) to N points by arc length in
 // (τ, v) space, treating each consecutive pair as a straight segment.
 // τ is unwrapped relative to the previous vertex (each step in (-0.5,
